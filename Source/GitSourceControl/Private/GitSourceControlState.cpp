@@ -365,6 +365,11 @@ bool FGitSourceControlState::CanEdit() const
 
 bool FGitSourceControlState::CanDelete() const
 {
+	if (IsAdded())
+	{
+		return true;
+	}
+	
 	// Perforce enforces that a deleted file must be current.
 	if (!IsCurrent())
 	{
