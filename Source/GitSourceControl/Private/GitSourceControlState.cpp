@@ -237,6 +237,11 @@ bool FGitSourceControlState::CanCheckIn() const
 	{
 		return true;
 	}
+	
+	if (IsDeleted())
+	{
+		return true;
+	}
 
 	// Cannot check back in if conflicted or not current 
 	if (!IsCurrent() || IsConflicted())
