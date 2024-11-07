@@ -52,7 +52,9 @@ void FGitSourceControlProvider::Init(bool bForceConnection)
 	UPackage::PackageSavedWithContextEvent.AddStatic(&GitSourceControlUtils::UpdateFileStagingOnSaved);
 	
 	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
-	AssetRegistryModule.Get().OnAssetRenamed().AddStatic(&GitSourceControlUtils::UpdateStateOnAssetRename);	
+	AssetRegistryModule.Get().OnAssetRenamed().AddStatic(&GitSourceControlUtils::UpdateStateOnAssetRename);
+	FEditorDelegates::OnPackageDeleted.AddStatic(&GitSourceControlUtils::CheckoutOnDelete);
+
 
 	// bForceConnection: not used anymore
 }
