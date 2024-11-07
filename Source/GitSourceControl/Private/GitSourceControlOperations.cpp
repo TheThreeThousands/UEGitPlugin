@@ -684,8 +684,7 @@ bool FGitFetchWorker::Execute(FGitSourceControlCommand& InCommand)
 	if (Operation->bUpdateStatus)
 	{
 		// Now update the status of all our files
-		const TArray<FString> ProjectDirs {FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
-										   FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath())};
+		const TArray<FString> ProjectDirs { FString(FPlatformProcess::BaseDir()) };
 		TMap<FString, FGitSourceControlState> UpdatedStates;
 		InCommand.bCommandSuccessful = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking,
 																			  ProjectDirs, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
