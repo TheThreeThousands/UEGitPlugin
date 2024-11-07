@@ -2530,33 +2530,6 @@ TSharedPtr<ISourceControlRevision, ESPMode::ThreadSafe> GetOriginRevisionOnBranc
 	return nullptr;
 }
 
-	void CheckoutOnDelete(UPackage* DeletedPackage)
-	{
-		FString PackageFileName = DeletedPackage->GetFullName();
-		TArray<TSharedRef<ISourceControlState>> Results;
-		FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
-		if (!GitSourceControl)
-		{
-			return;
-		}
-		FGitSourceControlProvider& Provider = GitSourceControl->GetProvider();
-		if (Provider.GetState({ PackageFileName }, Results, EStateCacheUsage::Use) == ECommandResult::Succeeded)
-		{
-			// Moved / renamed / copied files aren't source controlled, so ensure they're writable if we try to delete them
-			// Otherwise the file won't be deleted on disk, it will only be unloaded from UE
-			// At the time of writing, the engine runs ObjectTools::CleanupAfterSuccessfulDelete which checks if it's deletable by source control, and actually deletes the file *after* unloading it from the engine
-			// So if SCC blocks the delete in any way, the file appears deleted in editor, but still exists on disk.
-			if (Results[0]->IsAdded() || !Results[0]->IsSourceControlled())
-			{
-				FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*PackageFileName, false);
-			}
-			else if (!Results[0]->IsCheckedOutOther())
-			{
-				USourceControlHelpers::CheckOutFile(PackageFileName, true);
-			}
-		}
-	}
-	
 } // namespace GitSourceControlUtils
 
 #undef LOCTEXT_NAMESPACE
