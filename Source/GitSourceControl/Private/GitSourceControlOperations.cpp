@@ -470,41 +470,22 @@ bool FGitDeleteWorker::UpdateStates() const
 }
 
 
-// Get lists of Missing files (ie "deleted"), Modified files, and "other than Added" Existing files
-void GetMissingVsExistingFiles(const TArray<FString>& InFiles, TArray<FString>& OutMissingFiles, TArray<FString>& OutAllExistingFiles, TArray<FString>& OutOtherThanAddedExistingFiles)
+void GroupFileCommandsForRevert(const TArray<FString>& InFiles, TArray<FString>& FilesToRemove, TArray<FString>& FilesToCheckout)
 {
 	FGitSourceControlModule& GitSourceControl = FGitSourceControlModule::Get();
 	FGitSourceControlProvider& Provider = GitSourceControl.GetProvider();
-
-	const TArray<FString> Files = (InFiles.Num() > 0) ? (InFiles) : (Provider.GetFilesInCache());
-
+	
 	TArray<TSharedRef<ISourceControlState, ESPMode::ThreadSafe>> LocalStates;
-	Provider.GetState(Files, LocalStates, EStateCacheUsage::Use);
+	Provider.GetState(InFiles, LocalStates, EStateCacheUsage::Use);
 	for (const auto& State : LocalStates)
 	{
-		if (FPaths::FileExists(State->GetFilename()))
+		if (State->IsAdded())
 		{
-			if (State->IsAdded())
-			{
-				OutAllExistingFiles.Add(State->GetFilename());
-			}
-			else if (State->IsModified())
-			{
-				OutOtherThanAddedExistingFiles.Add(State->GetFilename());
-				OutAllExistingFiles.Add(State->GetFilename());
-			}
-			else if (State->CanRevert()) // for locked but unmodified files
-			{
-				OutOtherThanAddedExistingFiles.Add(State->GetFilename());
-			}
+			FilesToRemove.Add(State->GetFilename());
 		}
-		else
+		else if (State->CanRevert())
 		{
-			// If already queued for deletion, don't try to delete again
-			if (State->IsSourceControlled() && !State->IsDeleted())
-			{
-				OutMissingFiles.Add(State->GetFilename());
-			}
+			FilesToCheckout.Add(State->GetFilename());
 		}
 	}
 }
@@ -519,54 +500,39 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 	InCommand.bCommandSuccessful = true;
 
 	// Filter files by status
-	TArray<FString> MissingFiles;
-	TArray<FString> AllExistingFiles;
-	TArray<FString> OtherThanAddedExistingFiles;
-	GetMissingVsExistingFiles(InCommand.Files, MissingFiles, AllExistingFiles, OtherThanAddedExistingFiles);
-
+	TArray<FString> AllFilesToRevert = InCommand.Files.Num() == 0 ? FGitSourceControlModule::Get().GetProvider().GetFilesInCache() : InCommand.Files;
 	const bool bRevertAll = InCommand.Files.Num() < 1;
 	if (bRevertAll)
 	{
-		TArray<FString> Parms;
-		Parms.Add(TEXT("--hard"));
-		InCommand.bCommandSuccessful &= GitSourceControlUtils::RunCommand(TEXT("reset"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, Parms, FGitSourceControlModule::GetEmptyStringArray(), InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+		TArray<FString> Params;
+		Params.Add(TEXT("--hard"));
+		InCommand.bCommandSuccessful &= GitSourceControlUtils::RunCommand(TEXT("reset"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, Params, FGitSourceControlModule::GetEmptyStringArray(), InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 
-		Parms.Reset(2);
-		Parms.Add(TEXT("-f")); // force
-		Parms.Add(TEXT("-d")); // remove directories
-		InCommand.bCommandSuccessful &= GitSourceControlUtils::RunCommand(TEXT("clean"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, Parms, FGitSourceControlModule::GetEmptyStringArray(), InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+		Params.Reset(2);
+		Params.Add(TEXT("-f")); // force
+		Params.Add(TEXT("-d")); // remove directories
+		InCommand.bCommandSuccessful &= GitSourceControlUtils::RunCommand(TEXT("clean"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, Params, FGitSourceControlModule::GetEmptyStringArray(), InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 	}
 	else
 	{
-		if (MissingFiles.Num() > 0)
+		TArray<FString> FilesToRemove;
+		TArray<FString> FilesToCheckout;
+		GroupFileCommandsForRevert(InCommand.Files, FilesToRemove, FilesToCheckout);
+
+		// We've missed performing an operation on some files.
+		ensure(FilesToRemove.Num() + FilesToCheckout.Num() == InCommand.Files.Num());
+		if (FilesToRemove.Num() > 0)
 		{
 			// "Added" files that have been deleted needs to be removed from revision control
-			InCommand.bCommandSuccessful &= GitSourceControlUtils::RunCommand(TEXT("rm"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, FGitSourceControlModule::GetEmptyStringArray(), MissingFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+			InCommand.bCommandSuccessful &= GitSourceControlUtils::RunCommand(TEXT("rm"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, FGitSourceControlModule::GetEmptyStringArray(), FilesToRemove, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 		}
-		if (AllExistingFiles.Num() > 0)
+		if (FilesToCheckout.Num() > 0)
 		{
-			// reset and revert any changes already added to the index
-			InCommand.bCommandSuccessful &= GitSourceControlUtils::RunCommand(TEXT("reset"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, FGitSourceControlModule::GetEmptyStringArray(), AllExistingFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-			InCommand.bCommandSuccessful &= GitSourceControlUtils::RunCommand(TEXT("checkout"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, FGitSourceControlModule::GetEmptyStringArray(), AllExistingFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-		}
-		if (OtherThanAddedExistingFiles.Num() > 0)
-		{
-			// revert any changes in working copy (this would fails if the asset was in "Added" state, since after "reset" it is now "untracked")
-			// may need to try a few times due to file locks from prior operations
-			bool CheckoutSuccess = false;
-			int32 Attempts = 10;
-			while( Attempts-- > 0 )
-			{
-				CheckoutSuccess = GitSourceControlUtils::RunCommand(TEXT("checkout"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, FGitSourceControlModule::GetEmptyStringArray(), OtherThanAddedExistingFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-				if (CheckoutSuccess)
-				{
-					break;
-				}
-
-				FPlatformProcess::Sleep(0.1f);
-			}
-			
-			InCommand.bCommandSuccessful &= CheckoutSuccess;
+			// HEAD param allows us to re-pull files which have been deleted.
+			TArray<FString> Params;
+			Params.Add(TEXT("HEAD"));
+			// Checkout back to the last commit for any modified files.
+			InCommand.bCommandSuccessful &= GitSourceControlUtils::RunCommand(TEXT("checkout"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, Params, FilesToCheckout, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 		}
 	}
 
@@ -575,7 +541,7 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 		// unlock files: execute the LFS command on relative filenames
 		// (unlock only locked files, that is, not Added files)
 		TArray<FString> LockedFiles;
-		GitSourceControlUtils::GetLockedFiles(OtherThanAddedExistingFiles, LockedFiles);
+		GitSourceControlUtils::GetLockedFiles(AllFilesToRevert, LockedFiles);
 		if (LockedFiles.Num() > 0)
 		{
 			const TArray<FString>& RelativeFiles = GitSourceControlUtils::RelativeFilenames(LockedFiles, InCommand.PathToGitRoot);
@@ -591,19 +557,9 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 		}
 	}
 
-	// If no files were specified (full revert), refresh all relevant files instead of the specified files (which is an empty list in full revert)
-	// This is required so that files that were "Marked for add" have their status updated after a full revert.
-	TArray<FString> FilesToUpdate = InCommand.Files;
-	if (InCommand.Files.Num() <= 0)
-	{
-		for (const auto& File : MissingFiles) FilesToUpdate.Add(File);
-		for (const auto& File : AllExistingFiles) FilesToUpdate.Add(File);
-		for (const auto& File : OtherThanAddedExistingFiles) FilesToUpdate.Add(File);
-	}
-
 	// now update the status of our files
 	TMap<FString, FGitSourceControlState> UpdatedStates;
-	bool bSuccess = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking, FilesToUpdate, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
+	bool bSuccess = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking, AllFilesToRevert, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
 	if (bSuccess)
 	{
 		GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
