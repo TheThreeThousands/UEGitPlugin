@@ -474,11 +474,9 @@ void GroupFileCommandsForRevert(const TArray<FString>& InFiles, TArray<FString>&
 {
 	FGitSourceControlModule& GitSourceControl = FGitSourceControlModule::Get();
 	FGitSourceControlProvider& Provider = GitSourceControl.GetProvider();
-
-	const TArray<FString> Files = (InFiles.Num() > 0) ? (InFiles) : (Provider.GetFilesInCache());
-
+	
 	TArray<TSharedRef<ISourceControlState, ESPMode::ThreadSafe>> LocalStates;
-	Provider.GetState(Files, LocalStates, EStateCacheUsage::Use);
+	Provider.GetState(InFiles, LocalStates, EStateCacheUsage::Use);
 	for (const auto& State : LocalStates)
 	{
 		if (State->IsAdded())
