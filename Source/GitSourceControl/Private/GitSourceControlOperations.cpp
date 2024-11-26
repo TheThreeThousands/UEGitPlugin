@@ -15,6 +15,7 @@
 #include "SourceControlHelpers.h"
 #include "Logging/MessageLog.h"
 #include "Misc/MessageDialog.h"
+#include "HAL/FileManager.h"
 #include "HAL/PlatformProcess.h"
 #include "GenericPlatform/GenericPlatformFile.h"
 #if ENGINE_MAJOR_VERSION >= 5
@@ -470,19 +471,38 @@ bool FGitDeleteWorker::UpdateStates() const
 }
 
 
-void GroupFileCommandsForRevert(const TArray<FString>& InFiles, TArray<FString>& FilesToRemove, TArray<FString>& FilesToCheckout)
+void GroupFileCommandsForRevert(const TArray<FString>& InFiles, TArray<FString>& FilesToRemove, TArray<FString>& FilesToCheckout, TArray<FString>& FilesToReset, TArray<FString>& FilesToDelete)
 {
 	FGitSourceControlModule& GitSourceControl = FGitSourceControlModule::Get();
 	FGitSourceControlProvider& Provider = GitSourceControl.GetProvider();
-	
+
 	TArray<TSharedRef<ISourceControlState, ESPMode::ThreadSafe>> LocalStates;
 	Provider.GetState(InFiles, LocalStates, EStateCacheUsage::Use);
 	for (const auto& State : LocalStates)
 	{
 		if (State->IsAdded())
 		{
-			FilesToRemove.Add(State->GetFilename());
+			if (FPaths::FileExists(State->GetFilename()))
+			{
+				// Git rm won't delete the file because the engine still has it in use, and reset won't work on a file which doesn't exist on disk
+				// so we have to delete it ourselves, and then remove it from the index.
+				if (USourceControlPreferences::ShouldDeleteNewFilesOnRevert())
+				{
+					FilesToDelete.Add(State->GetFilename());
+					FilesToRemove.Add(State->GetFilename());
+				}
+				else
+				{
+					FilesToReset.Add(State->GetFilename());
+				}
+			}
+			else
+			{
+				// When you delete a file through content browser, UE will send a revert command to allow us to clean up the stage state.
+				FilesToRemove.Add(State->GetFilename());
+			}
 		}
+		// Checkout to head will reset the file back to what it is in your current commit, and reset the index.
 		else if (State->CanRevert())
 		{
 			FilesToCheckout.Add(State->GetFilename());
@@ -500,8 +520,7 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 	InCommand.bCommandSuccessful = true;
 
 	// Filter files by status
-	TArray<FString> AllFilesToRevert = InCommand.Files.Num() == 0 ? FGitSourceControlModule::Get().GetProvider().GetFilesInCache() : InCommand.Files;
-	const bool bRevertAll = InCommand.Files.Num() < 1;
+	const bool bRevertAll = InCommand.Files.Num() == 0;
 	if (bRevertAll)
 	{
 		TArray<FString> Params;
@@ -517,10 +536,23 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 	{
 		TArray<FString> FilesToRemove;
 		TArray<FString> FilesToCheckout;
-		GroupFileCommandsForRevert(InCommand.Files, FilesToRemove, FilesToCheckout);
+		TArray<FString> FilesToReset;
+		TArray<FString> FilesToDelete;
+		GroupFileCommandsForRevert(InCommand.Files, FilesToRemove, FilesToCheckout, FilesToReset, FilesToDelete);
 
-		// We've missed performing an operation on some files.
-		ensure(FilesToRemove.Num() + FilesToCheckout.Num() == InCommand.Files.Num());
+		// Verify we haven't missed performing an operation on any file passed on for revert
+		ensure(FilesToRemove.Num() + FilesToCheckout.Num() + FilesToReset.Num() == InCommand.Files.Num());
+
+		for (const FString& FileName : FilesToDelete)
+		{
+			bool RequireExists = true;
+			bool EvenReadOnly = true;
+			IFileManager::Get().Delete(*FileName, RequireExists, EvenReadOnly);
+		}
+		if (FilesToReset.Num() > 0)
+		{
+			InCommand.bCommandSuccessful &= GitSourceControlUtils::RunCommand(TEXT("reset"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, FGitSourceControlModule::GetEmptyStringArray(), FilesToReset, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+		}
 		if (FilesToRemove.Num() > 0)
 		{
 			// "Added" files that have been deleted needs to be removed from revision control
@@ -536,12 +568,14 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 		}
 	}
 
+	// This is all the files we "asked" to revert, in the case of InCommand.Files everything *should* be changed
+	// in the case where we didn't pass in any files, we ran a revert on the repository root, so we should refresh everything
+	const TArray<FString>& RequestedReverts = bRevertAll ? FGitSourceControlModule::Get().GetProvider().GetFilesInCache() : InCommand.Files;
 	if (InCommand.bUsingGitLfsLocking)
 	{
 		// unlock files: execute the LFS command on relative filenames
-		// (unlock only locked files, that is, not Added files)
 		TArray<FString> LockedFiles;
-		GitSourceControlUtils::GetLockedFiles(AllFilesToRevert, LockedFiles);
+		GitSourceControlUtils::GetLockedFiles(RequestedReverts, LockedFiles);
 		if (LockedFiles.Num() > 0)
 		{
 			const TArray<FString>& RelativeFiles = GitSourceControlUtils::RelativeFilenames(LockedFiles, InCommand.PathToGitRoot);
@@ -559,7 +593,7 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 
 	// now update the status of our files
 	TMap<FString, FGitSourceControlState> UpdatedStates;
-	bool bSuccess = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking, AllFilesToRevert, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
+	bool bSuccess = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking, RequestedReverts, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
 	if (bSuccess)
 	{
 		GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
