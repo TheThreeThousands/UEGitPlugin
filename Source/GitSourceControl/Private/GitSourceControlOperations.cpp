@@ -619,6 +619,19 @@ FName FGitSyncWorker::GetName() const
 
 bool FGitSyncWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	FText SyncNotAllowedMessage(LOCTEXT("GitSync_NotAllowed_Msg", "Please exit Unreal Engine and update through GitHub Desktop to get latest changes."));
+	FText SyncNotAllowedTitle(LOCTEXT("GitSync_NotAllowed_Title", "Synching is not allowed"));
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 3
+	FMessageDialog::Open(EAppMsgType::Ok, SyncNotAllowedMessage, SyncNotAllowedTitle);
+#else
+	FMessageDialog::Open(EAppMsgType::Ok, SyncNotAllowedMessage, &SyncNotAllowedTitle);
+#endif
+	UE_LOG(LogSourceControl, Log, TEXT("Commit failed because we couldn't fetch remote status."));
+
+	InCommand.bCommandSuccessful = false;
+	return false;
+
+	/*
 	TArray<FString> Results;
 	const bool bFetched = GitSourceControlUtils::FetchRemote(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, false, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 	if (!bFetched)
@@ -640,6 +653,7 @@ bool FGitSyncWorker::Execute(FGitSourceControlCommand& InCommand)
 	GitSourceControlUtils::GetCommitInfo(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.CommitId, InCommand.CommitSummary);
 
 	return InCommand.bCommandSuccessful;
+	*/
 }
 
 bool FGitSyncWorker::UpdateStates() const
