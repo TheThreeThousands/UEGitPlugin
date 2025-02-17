@@ -374,6 +374,8 @@ bool CheckLFSLockable(const FString& InPathToGitBinary, const FString& InReposit
 
 GITSOURCECONTROL_API bool FetchRemote( const FString & InPathToGitBinary, const FString & InPathToRepositoryRoot, bool InUsingGitLfsLocking, TArray< FString > & OutResults, TArray< FString > & OutErrorMessages );
 
+bool GetNumRevisionsBehindOrigin(const FString& InPathToGitBinary, const FString& InRepositoryRoot, int& NumRevisionsBehind, TArray<FString>& OutErrorMessages);
+
 bool PullOrigin(const FString& InPathToGitBinary, const FString& InPathToRepositoryRoot, const TArray<FString>& InFiles, TArray<FString>& OutFiles,
 				TArray<FString>& OutResults, TArray<FString>& OutErrorMessages);
 
