@@ -194,13 +194,9 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 
 		if (!success)
 		{
-			FText CommitFailedMessage(LOCTEXT("GitCommit_FetchFailed_Msg", "Git Commit failed to check for remote changes\n please check your internet connection and try again."));
+			FText CommitFailedMessage(LOCTEXT("GitCommit_FetchFailed_Msg", "Git Commit failed to check for remote changes\nPlease check your internet connection and try again."));
 			FText CommitFailedTitle(LOCTEXT("GitCommit_FetchFailed_Title", "Git Commit failed"));
-#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 3
 			FMessageDialog::Open(EAppMsgType::Ok, CommitFailedMessage, CommitFailedTitle);
-#else
-			FMessageDialog::Open(EAppMsgType::Ok, CommitFailedMessage, &CommitFailedTitle);
-#endif
 			UE_LOG(LogSourceControl, Log, TEXT("Commit failed because we couldn't fetch remote status."));
 
 			InCommand.bCommandSuccessful = false;
@@ -211,11 +207,7 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 		{
 			FText CommitFailedMessage(LOCTEXT("GitCommit_OutOfDate_Msg", "Git Commit failed because there are newer revisions available on remote.\nPlease close Unreal Engine, update through GitHub Desktop and try again."));
 			FText CommitFailedTitle(LOCTEXT("GitCommit_OutOfDate_Title", "Git Commit failed - Out Of Date"));
-#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 3
 			FMessageDialog::Open(EAppMsgType::Ok, CommitFailedMessage, CommitFailedTitle);
-#else
-			FMessageDialog::Open(EAppMsgType::Ok, CommitFailedMessage, &CommitFailedTitle);
-#endif
 			UE_LOG(LogSourceControl, Log, TEXT("Commit failed because there are newer revisions available on remote."));
 			InCommand.bCommandSuccessful = false;
 			return false;
@@ -621,12 +613,8 @@ bool FGitSyncWorker::Execute(FGitSourceControlCommand& InCommand)
 {
 	FText SyncNotAllowedMessage(LOCTEXT("GitSync_NotAllowed_Msg", "Please exit Unreal Engine and update through GitHub Desktop to get latest changes."));
 	FText SyncNotAllowedTitle(LOCTEXT("GitSync_NotAllowed_Title", "Synching is not allowed"));
-#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 3
 	FMessageDialog::Open(EAppMsgType::Ok, SyncNotAllowedMessage, SyncNotAllowedTitle);
-#else
-	FMessageDialog::Open(EAppMsgType::Ok, SyncNotAllowedMessage, &SyncNotAllowedTitle);
-#endif
-	UE_LOG(LogSourceControl, Log, TEXT("Commit failed because we couldn't fetch remote status."));
+	UE_LOG(LogSourceControl, Log, TEXT("Sync cancelled - not allowed."));
 
 	InCommand.bCommandSuccessful = false;
 	return false;
