@@ -2421,6 +2421,31 @@ bool FetchRemote(const FString& InPathToGitBinary, const FString& InPathToReposi
 					  FGitSourceControlModule::GetEmptyStringArray(), OutResults, OutErrorMessages);
 }
 
+bool GetNumRevisionsBehindOrigin(const FString& InPathToGitBinary, const FString& InRepositoryRoot, int& NumRevisionsBehind, TArray<FString>& OutErrorMessages)
+{
+	TArray<FString> OutResults;
+	TArray<FString> OutErrorMesssages;
+	TArray<FString> Params{ "--abbrev-ref HEAD" };
+	bool success = RunCommand(TEXT("rev-parse"), InPathToGitBinary, InRepositoryRoot, Params, FGitSourceControlModule::GetEmptyStringArray(), OutResults, OutErrorMesssages);
+	if (!success)
+	{
+		return false;
+	}
+
+	const FString BranchRef = OutResults[0];
+	Params = { FString::Printf(TEXT("--count HEAD..origin/%s"), *BranchRef) };
+	OutResults.Empty();
+	success = RunCommand(TEXT("rev-list"), InPathToGitBinary, InRepositoryRoot, Params, FGitSourceControlModule::GetEmptyStringArray(), OutResults, OutErrorMesssages);
+	if (!success)
+	{
+		return false;
+	}
+
+	const FString Number = OutResults[0];
+	NumRevisionsBehind = FCString::Atoi(*OutResults[0]);
+	return true;
+}
+
 bool PullOrigin(const FString& InPathToGitBinary, const FString& InPathToRepositoryRoot, const TArray<FString>& InFiles, TArray<FString>& OutFiles,
 				TArray<FString>& OutResults, TArray<FString>& OutErrorMessages)
 {

@@ -547,23 +547,6 @@ void FGitSourceControlMenu::AddMenuExtension(FMenuBuilder& Builder)
 
 	Builder.AddMenuEntry(
 #if ENGINE_MAJOR_VERSION >= 5
-		"GitSync",
-#endif
-		LOCTEXT("GitSync",				"Pull"),
-		LOCTEXT("GitSyncTooltip",		"Update all files in the local repository to the latest version of the remote server."),
-#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 1
-		FSlateIcon(FAppStyle::GetAppStyleSetName(), "SourceControl.Actions.Sync"),
-#else
-		FSlateIcon(FEditorStyle::GetStyleSetName(), "SourceControl.Actions.Sync"),
-#endif
-		FUIAction(
-			FExecuteAction::CreateRaw(this, &FGitSourceControlMenu::SyncClicked),
-			FCanExecuteAction::CreateRaw(this, &FGitSourceControlMenu::HaveRemoteUrl)
-		)
-	);
-
-	Builder.AddMenuEntry(
-#if ENGINE_MAJOR_VERSION >= 5
 		"GitRevert",
 #endif
 		LOCTEXT("GitRevert",			"Revert"),

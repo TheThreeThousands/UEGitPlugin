@@ -184,6 +184,36 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 	{
 		FGitSourceControlProvider& Provider = FGitSourceControlModule::Get().GetProvider();
 
+		// Fetch so we can check if there are pending commits to pull.
+		bool success = GitSourceControlUtils::FetchRemote(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, false,
+			InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+
+		// We don't want to allow UE to pull changes, it might be something we add support for in future, but right now this git plugin rebases, and it's causing content teams lots of grief.
+		// so if we've got pending commits on remote, just bail.
+		int NumRevisionsBehind = 0;
+		success = GitSourceControlUtils::GetNumRevisionsBehindOrigin(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, NumRevisionsBehind, InCommand.ResultInfo.ErrorMessages);
+
+		if (!success)
+		{
+			FText CommitFailedMessage(LOCTEXT("GitCommit_FetchFailed_Msg", "Git Commit failed to check for remote changes\nPlease check your internet connection and try again."));
+			FText CommitFailedTitle(LOCTEXT("GitCommit_FetchFailed_Title", "Git Commit failed"));
+			FMessageDialog::Open(EAppMsgType::Ok, CommitFailedMessage, CommitFailedTitle);
+			UE_LOG(LogSourceControl, Log, TEXT("Commit failed because we couldn't fetch remote status."));
+
+			InCommand.bCommandSuccessful = false;
+			return false;
+		}
+
+		if (NumRevisionsBehind > 0)
+		{
+			FText CommitFailedMessage(LOCTEXT("GitCommit_OutOfDate_Msg", "Git Commit failed because there are newer revisions available on remote.\nPlease close Unreal Engine, update through GitHub Desktop and try again."));
+			FText CommitFailedTitle(LOCTEXT("GitCommit_OutOfDate_Title", "Git Commit failed - Out Of Date"));
+			FMessageDialog::Open(EAppMsgType::Ok, CommitFailedMessage, CommitFailedTitle);
+			UE_LOG(LogSourceControl, Log, TEXT("Commit failed because there are newer revisions available on remote."));
+			InCommand.bCommandSuccessful = false;
+			return false;
+		}
+
 		if (bDoCommit)
 		{
 			FString ParamCommitMsgFilename = TEXT("--file=\"");
@@ -615,6 +645,15 @@ FName FGitSyncWorker::GetName() const
 
 bool FGitSyncWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	FText SyncNotAllowedMessage(LOCTEXT("GitSync_NotAllowed_Msg", "Please exit Unreal Engine and update through GitHub Desktop to get latest changes."));
+	FText SyncNotAllowedTitle(LOCTEXT("GitSync_NotAllowed_Title", "Synching is not allowed"));
+	FMessageDialog::Open(EAppMsgType::Ok, SyncNotAllowedMessage, SyncNotAllowedTitle);
+	UE_LOG(LogSourceControl, Log, TEXT("Sync cancelled - not allowed."));
+
+	InCommand.bCommandSuccessful = false;
+	return false;
+
+	/*
 	TArray<FString> Results;
 	const bool bFetched = GitSourceControlUtils::FetchRemote(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, false, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 	if (!bFetched)
@@ -636,6 +675,7 @@ bool FGitSyncWorker::Execute(FGitSourceControlCommand& InCommand)
 	GitSourceControlUtils::GetCommitInfo(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.CommitId, InCommand.CommitSummary);
 
 	return InCommand.bCommandSuccessful;
+	*/
 }
 
 bool FGitSyncWorker::UpdateStates() const
