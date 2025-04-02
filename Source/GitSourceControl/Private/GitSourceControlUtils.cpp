@@ -34,7 +34,11 @@
 #include "PackageTools.h"
 #include "FileHelpers.h"
 #include "Misc/MessageDialog.h"
+
+#include "Runtime/Launch/Resources/Version.h"
+#if ENGINE_MAJOR_VERSION == 5 
 #include "UObject/ObjectSaveContext.h"
+#endif
 
 #include "Async/Async.h"
 #include "UObject/Linker.h"
@@ -166,7 +170,11 @@ namespace GitSourceControlUtils
 				}
 			}
 		}
+#if ENGINE_MAJOR_VERSION >= 5
 		if (!PackageNotIncludedInGit.IsEmpty())
+#else
+		if (PackageNotIncludedInGit.Num() > 0)
+#endif
 		{
 			for (const FString& ToRemoveFile : PackageNotIncludedInGit)
 			{
@@ -1654,6 +1662,7 @@ FString GetFullPathFromGitStatus(const FString& Result, const FString& InReposit
 	return File;
 }
 
+#if ENGINE_MAJOR_VERSION == 5
 bool UpdateChangelistStateByCommand()
 {
 	// TODO: This is a temporary solution.
@@ -1707,6 +1716,7 @@ bool UpdateChangelistStateByCommand()
 	}
 	return true;
 }
+#endif
 	
 // Run a batch of Git "status" command to update status of given files and/or directories.
 bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const bool InUsingLfsLocking, const TArray<FString>& InFiles,
@@ -1738,14 +1748,17 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
 	{
 		ParseStatusResults(InPathToGitBinary, InRepositoryRoot, InUsingLfsLocking, RepoFiles, ResultsMap, OutStates);
 	}
-	
+
+#if ENGINE_MAJOR_VERSION == 5
 	UpdateChangelistStateByCommand();
+#endif
 
 	CheckRemote(InPathToGitBinary, InRepositoryRoot, RepoFiles, OutErrorMessages, OutStates);
 
 	return bResult;
 }
 
+#if ENGINE_MAJOR_VERSION == 5
 void UpdateFileStagingOnSaved(const FString& Filename, UPackage* Pkg, FObjectPostSaveContext ObjectSaveContext)
 {
 	UpdateFileStagingOnSavedInternal(Filename);
@@ -1773,6 +1786,7 @@ bool UpdateFileStagingOnSavedInternal(const FString& Filename)
 	
 	return bResult;
 }
+#endif
 	
 void UpdateStateOnAssetRename(const FAssetData& InAssetData, const FString& InOldName)
 {
@@ -1783,8 +1797,12 @@ void UpdateStateOnAssetRename(const FAssetData& InAssetData, const FString& InOl
 		return ;
 	}
 	TSharedRef<FGitSourceControlState, ESPMode::ThreadSafe> State = Provider.GetStateInternal(InOldName);	
-	
+
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 1
 	State->LocalFilename = InAssetData.GetObjectPathString();
+#else
+	State->LocalFilename = InAssetData.ObjectPath.ToString();
+#endif
 }
 
 // Run a Git `cat-file --filters` command to dump the binary content of a revision into a file.
@@ -1856,65 +1874,20 @@ bool RunDumpToFile(const FString& InPathToGitBinary, const FString& InRepository
 		FPlatformProcess::Sleep(0.01f);
 
 		TArray<uint8> BinaryFileContent;
-		bool bRemovedLFSMessage = false;
-		while (FPlatformProcess::IsProcRunning(ProcessHandle))
+		bool bShouldContinue = true;
+		while (FPlatformProcess::IsProcRunning(ProcessHandle) || bShouldContinue)
 		{
 			TArray<uint8> BinaryData;
-			FPlatformProcess::ReadPipeToArray(PipeRead, BinaryData);
+			bShouldContinue = FPlatformProcess::ReadPipeToArray(PipeRead, BinaryData);
 			if (BinaryData.Num() > 0)
 			{
-				if (GitSourceControl.AccessSettings().IsUsingGitLfsLocking())
-				{
-					// @todo: this is hacky!
-					if (BinaryData[0] == 68) // Check for D in "Downloading"
-					{
-						if (BinaryData[BinaryData.Num() - 1] == 10) // Check for newline
-						{
-							BinaryData.Reset();
-							bRemovedLFSMessage = true;
-						}
-					}
-					else
-					{
-						BinaryFileContent.Append(MoveTemp(BinaryData));
-					}
-				}
-				else
-				{
-					BinaryFileContent.Append(MoveTemp(BinaryData));
-				}
-			}
-		}
-		TArray<uint8> BinaryData;
-		FPlatformProcess::ReadPipeToArray(PipeRead, BinaryData);
-		if (BinaryData.Num() > 0)
-		{
-			if (GitSourceControl.AccessSettings().IsUsingGitLfsLocking())
-			{
 				// @todo: this is hacky!
-				if (!bRemovedLFSMessage && BinaryData[0] == 68) // Check for D in "Downloading"
+				bool bIsLFSMessage = BinaryData[0] == 68 // Check for D in "Downloading"
+									&& BinaryData.Last() == 10; // Check for new line
+				if (GitSourceControl.AccessSettings().IsUsingGitLfsLocking() && bIsLFSMessage)
 				{
-					int32 NewLineIndex = 0;
-					for (int32 Index = 0; Index < BinaryData.Num(); Index++)
-					{
-						if (BinaryData[Index] == 10) // Check for newline
-						{
-							NewLineIndex = Index;
-							break;
-						}
-					}
-					if (NewLineIndex > 0)
-					{
-						BinaryData.RemoveAt(0, NewLineIndex + 1);
-					}
+					continue;
 				}
-				else
-				{
-					BinaryFileContent.Append(MoveTemp(BinaryData));
-				}
-			}
-			else
-			{
 				BinaryFileContent.Append(MoveTemp(BinaryData));
 			}
 		}
@@ -2383,6 +2356,7 @@ bool CheckLFSLockable(const FString& InPathToGitBinary, const FString& InReposit
 {
 	TArray<FString> Results;
 	TArray<FString> Parameters;
+	LockableTypes.Empty(); // clear previous results
 	Parameters.Add(TEXT("lockable")); // follow file renames
 
 	const bool bResults = RunCommand(TEXT("check-attr"), InPathToGitBinary, InRepositoryRoot, Parameters, InFiles, Results, OutErrorMessages);
