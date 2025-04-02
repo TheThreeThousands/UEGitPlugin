@@ -43,11 +43,14 @@ class FGitLockedFilesCache
 {
 public:
 	static FDateTime LastUpdated;
+	static FCriticalSection LockedFilesLock;
 
- static const TMap<FString, FString>& GetLockedFiles() { return LockedFiles; }
- static void SetLockedFiles(const TMap<FString, FString>& newLocks);
- static void AddLockedFile(const FString& filePath, const FString& lockUser);
- static void RemoveLockedFile(const FString& filePath);
+	static const TMap<FString, FString>& GetLockedFiles() { return LockedFiles; }
+	static void NotifyChangedLocks(const TMap<FString, FString>& newLocks, const TMap<FString, FString>& oldLocks);
+	static void AddLockedFile(const FString& filePath, const FString& lockUser);
+	static void RemoveLockedFile(const FString& filePath);
+
+	static void SwapLockedFiles(TMap<FString, FString>& NewLocks);
 
 private:
  static void OnFileLockChanged(const FString& filePath, const FString& lockUser, bool locked);
@@ -353,16 +356,16 @@ GITSOURCECONTROL_API bool CollectNewStates( const TMap< FString, FGitSourceContr
  */
 bool CollectNewStates(const TArray<FString>& InFiles, TMap<const FString, FGitState>& OutResults, EFileState::Type FileState, ETreeState::Type TreeState = ETreeState::Unset, ELockState::Type LockState = ELockState::Unset, ERemoteState::Type RemoteState = ERemoteState::Unset);
 
-	/**
-		 * Run 'git lfs locks" to extract all lock information for all files in the repository
-		 *
-		 * @param	InRepositoryRoot	The Git repository from where to run the command - usually the Game directory
-		 * @param   GitBinaryFallBack   The Git binary fallback path
-		 * @param	OutErrorMessages    Any errors (from StdErr) as an array per-line
-		 * @param	OutLocks		    The lock results (file, username)
-		 * @returns true if the command succeeded and returned no errors
-		 */
-	bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallBack, TArray<FString>& OutErrorMessages, TMap<FString, FString>& OutLocks, bool bInvalidateCache = false);
+/**
+	* Run 'git lfs locks" to extract all lock information for all files in the repository
+	*
+	* @param	InRepositoryRoot	The Git repository from where to run the command - usually the Game directory
+	* @param   GitBinaryFallBack   The Git binary fallback path
+	* @param	OutErrorMessages    Any errors (from StdErr) as an array per-line
+	* @param	OutLocks		    The lock results (file, username)
+	* @returns true if the command succeeded and returned no errors
+*/
+bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallBack, TArray<FString>& OutErrorMessages, bool bInvalidateCache = false);
 
 /**
  * Gets locks from state cache

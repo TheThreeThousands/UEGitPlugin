@@ -82,10 +82,13 @@ const FString& FGitScopedTempFile::GetFilename() const
 
 FDateTime FGitLockedFilesCache::LastUpdated = FDateTime::MinValue();
 TMap<FString, FString> FGitLockedFilesCache::LockedFiles = TMap<FString, FString>();
+FCriticalSection FGitLockedFilesCache::LockedFilesLock = FCriticalSection();
 
-void FGitLockedFilesCache::SetLockedFiles(const TMap<FString, FString>& newLocks)
+void FGitLockedFilesCache::NotifyChangedLocks(const TMap<FString, FString>& newLocks, const TMap<FString, FString>& oldLocks)
 {	
-	for (auto lock : LockedFiles)
+	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
+
+	for (const auto& lock : oldLocks)
 	{
 		if (!newLocks.Contains(lock.Key))
 		{
@@ -93,28 +96,38 @@ void FGitLockedFilesCache::SetLockedFiles(const TMap<FString, FString>& newLocks
 		}
 	}
 	
-	for (auto lock : newLocks)
+	for (const auto& lock : newLocks)
 	{		
-		if (!LockedFiles.Contains(lock.Key))
+		if (!oldLocks.Contains(lock.Key))
 		{
 			OnFileLockChanged(lock.Key, lock.Value, true);
 		}		
 	}
-
-	LockedFiles = newLocks;
 }
 
 void FGitLockedFilesCache::AddLockedFile(const FString& filePath, const FString& lockUser)
 {
-	LockedFiles.Add(filePath, lockUser);
+	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
+	{
+		LockedFiles.Add(filePath, lockUser);
+	}
 	OnFileLockChanged(filePath, lockUser, true);
 }
 
 void FGitLockedFilesCache::RemoveLockedFile(const FString& filePath)
 {
 	FString user;
-	LockedFiles.RemoveAndCopyValue(filePath, user);
+	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
+	{
+		LockedFiles.RemoveAndCopyValue(filePath, user);
+	}
 	OnFileLockChanged(filePath, user, false);
+}
+
+void FGitLockedFilesCache::SwapLockedFiles(TMap<FString, FString>& NewLocks)
+{
+	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
+	Swap(LockedFiles, NewLocks);
 }
 
 void FGitLockedFilesCache::OnFileLockChanged(const FString& filePath, const FString& lockUser, bool locked)
@@ -173,8 +186,6 @@ namespace GitSourceControlUtils
 #if ENGINE_MAJOR_VERSION >= 5
 		if (!PackageNotIncludedInGit.IsEmpty())
 #else
-		if (PackageNotIncludedInGit.Num() > 0)
-#endif
 		{
 			for (const FString& ToRemoveFile : PackageNotIncludedInGit)
 			{
@@ -1539,9 +1550,16 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	OutErrorMessages.Append(ErrorMessages);
 }
 
+FString GetFullPathFromGitStatus(const FString& Result, const FString& InRepositoryRoot)
+{
+	const FString& RelativeFilename = FilenameFromGitStatus(Result);
+	FString File = FPaths::ConvertRelativePathToFull(InRepositoryRoot, RelativeFilename);
+	return File;
+}
+
 const FTimespan CacheLimit = FTimespan::FromSeconds(30);
 
-bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, TMap<FString, FString>& OutLocks, bool bInvalidateCache)
+bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, bool bInvalidateCache)
 {
 	// You may ask, why are we ignoring state cache, and instead maintaining our own lock cache?
 	// The answer is that state cache updating is another operation, and those that update status
@@ -1559,6 +1577,8 @@ bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallba
 		bCacheExpired = CacheTimeElapsed > CacheLimit;
 	}
 	bool bResult = false;
+
+	static TMap<FString, FString> NewLocks;
 	if (bCacheExpired)
 	{
 		// Our cache expired, or they asked us to expire cache. Query locks directly from the remote server.
@@ -1574,10 +1594,15 @@ bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallba
 #if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
 				UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
 #endif
-				OutLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
+				// We only care about files which actually exist on disk.
+				if (FPaths::FileExists(LockFile.LocalFilename))
+				{
+					NewLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
+				}
 			}
 			FGitLockedFilesCache::LastUpdated = CurrentTime;
-			FGitLockedFilesCache::SetLockedFiles(OutLocks);
+			FGitLockedFilesCache::NotifyChangedLocks(NewLocks, FGitLockedFilesCache::GetLockedFiles());
+			FGitLockedFilesCache::SwapLockedFiles(NewLocks);
 			return bResult;
 		}
 		// We tried to invalidate the UE cache, but we failed for some reason. Try updating lock state from LFS cache.
@@ -1655,12 +1680,6 @@ void GetLockedFiles(const TArray<FString>& InFiles, TArray<FString>& OutFiles)
 	}
 }
 
-FString GetFullPathFromGitStatus(const FString& Result, const FString& InRepositoryRoot)
-{
-	const FString& RelativeFilename = FilenameFromGitStatus(Result);
-	FString File = FPaths::ConvertRelativePathToFull(InRepositoryRoot, RelativeFilename);
-	return File;
-}
 
 #if ENGINE_MAJOR_VERSION == 5
 bool UpdateChangelistStateByCommand()
