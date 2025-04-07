@@ -109,9 +109,7 @@ void FGitLockedFilesCache::NotifyChangedLocks(const TMap<FString, FString>& newL
 void FGitLockedFilesCache::AddLockedFile(const FString& filePath, const FString& lockUser)
 {
 	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
-	{
-		LockedFiles.Add(filePath, lockUser);
-	}
+	LockedFiles.Add(filePath, lockUser);
 	OnFileLockChanged(filePath, lockUser, true);
 }
 
@@ -119,9 +117,7 @@ void FGitLockedFilesCache::RemoveLockedFile(const FString& filePath)
 {
 	FString user;
 	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
-	{
-		LockedFiles.RemoveAndCopyValue(filePath, user);
-	}
+	LockedFiles.RemoveAndCopyValue(filePath, user);
 	OnFileLockChanged(filePath, user, false);
 }
 
@@ -212,6 +208,8 @@ namespace GitSourceControlUtils
 #if ENGINE_MAJOR_VERSION >= 5
 		if (!PackageNotIncludedInGit.IsEmpty())
 #else
+		if (PackageNotIncludedInGit.Num() > 0)
+#endif
 		{
 			for (const FString& ToRemoveFile : PackageNotIncludedInGit)
 			{
@@ -1574,15 +1572,15 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	OutErrorMessages.Append(ErrorMessages);
 }
 
-FString GetFullPathFromGitStatus(const FString& Result, const FString& InRepositoryRoot)
-{
-	const FString& RelativeFilename = FilenameFromGitStatus(Result);
-	FString File = FPaths::ConvertRelativePathToFull(InRepositoryRoot, RelativeFilename);
-	return File;
-}
-
 void RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, bool bInvalidateCache)
 {
+	// Refresh could be called from multiple threads concurrently
+	// The NewLocks static here gets swapped with our locks cache, this is a static and not a member to avoid unnecessary allocations
+	// in large projects utilizing OFPA, the locks list could be potentially thousands of pairs of strings that get allocated and de-allocated every time we call this function
+	static TMap<FString, FString> NewLocks;
+	static FCriticalSection ConcurrencyProtection;
+	FScopeLock Lock(&ConcurrencyProtection);
+
 	// You may ask, why are we ignoring state cache, and instead maintaining our own lock cache?
 	// The answer is that state cache updating is another operation, and those that update status
 	// (and thus the state cache) are using GetAllLocks. However, querying remote locks are almost always
@@ -1595,7 +1593,6 @@ void RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallb
 	bool bCacheExpired = bInvalidateCache || FGitLockedFilesCache::HasCacheExpired();
 	bool bResult = false;
 
-	static TMap<FString, FString> NewLocks;
 	if (bCacheExpired)
 	{
 		// Our cache expired, or they asked us to expire cache. Query locks directly from the remote server.
@@ -1611,11 +1608,6 @@ void RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallb
 #if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
 				UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
 #endif
-				// We only care about files which actually exist on disk.
-				if (FPaths::FileExists(LockFile.LocalFilename))
-				{
-					NewLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
-				}
 			}
 			FGitLockedFilesCache::LastUpdated = CurrentTime;
 			FGitLockedFilesCache::SwapLockedFiles(NewLocks);
@@ -1690,6 +1682,12 @@ void GetLockedFiles(const TArray<FString>& InFiles, TArray<FString>& OutFiles)
 	}
 }
 
+FString GetFullPathFromGitStatus(const FString& Result, const FString& InRepositoryRoot)
+{
+	const FString& RelativeFilename = FilenameFromGitStatus(Result);
+	FString File = FPaths::ConvertRelativePathToFull(InRepositoryRoot, RelativeFilename);
+	return File;
+}
 
 #if ENGINE_MAJOR_VERSION == 5
 bool UpdateChangelistStateByCommand()
