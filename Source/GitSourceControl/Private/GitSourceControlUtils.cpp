@@ -34,7 +34,11 @@
 #include "PackageTools.h"
 #include "FileHelpers.h"
 #include "Misc/MessageDialog.h"
+
+#include "Runtime/Launch/Resources/Version.h"
+#if ENGINE_MAJOR_VERSION == 5 
 #include "UObject/ObjectSaveContext.h"
+#endif
 
 #include "Async/Async.h"
 #include "UObject/Linker.h"
@@ -81,10 +85,14 @@ const FString& FGitScopedTempFile::GetFilename() const
 
 FDateTime FGitLockedFilesCache::LastUpdated = FDateTime::MinValue();
 TMap<FString, FString> FGitLockedFilesCache::LockedFiles = TMap<FString, FString>();
+FCriticalSection FGitLockedFilesCache::LockedFilesLock = FCriticalSection();
+FTimespan FGitLockedFilesCache::CacheTimeout = FTimespan::FromSeconds(30);
 
-void FGitLockedFilesCache::SetLockedFiles(const TMap<FString, FString>& newLocks)
+void FGitLockedFilesCache::NotifyChangedLocks(const TMap<FString, FString>& newLocks, const TMap<FString, FString>& oldLocks)
 {	
-	for (auto lock : LockedFiles)
+	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
+
+	for (const auto& lock : oldLocks)
 	{
 		if (!newLocks.Contains(lock.Key))
 		{
@@ -92,19 +100,18 @@ void FGitLockedFilesCache::SetLockedFiles(const TMap<FString, FString>& newLocks
 		}
 	}
 	
-	for (auto lock : newLocks)
+	for (const auto& lock : newLocks)
 	{		
-		if (!LockedFiles.Contains(lock.Key))
+		if (!oldLocks.Contains(lock.Key))
 		{
 			OnFileLockChanged(lock.Key, lock.Value, true);
 		}		
 	}
-
-	LockedFiles = newLocks;
 }
 
 void FGitLockedFilesCache::AddLockedFile(const FString& filePath, const FString& lockUser)
 {
+	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
 	LockedFiles.Add(filePath, lockUser);
 	OnFileLockChanged(filePath, lockUser, true);
 }
@@ -112,8 +119,40 @@ void FGitLockedFilesCache::AddLockedFile(const FString& filePath, const FString&
 void FGitLockedFilesCache::RemoveLockedFile(const FString& filePath)
 {
 	FString user;
+	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
 	LockedFiles.RemoveAndCopyValue(filePath, user);
 	OnFileLockChanged(filePath, user, false);
+}
+
+bool FGitLockedFilesCache::Contains(const FString& filePath)
+{
+	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
+	return LockedFiles.Contains(filePath);
+}
+
+bool FGitLockedFilesCache::TryGetLockOwner(const FString& filePath, FString& outLockOwner)
+{
+	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
+	if (LockedFiles.Contains(filePath))
+	{
+		outLockOwner = LockedFiles[filePath];
+		return true;
+	}
+	return false;
+}
+
+void FGitLockedFilesCache::SwapLockedFiles(TMap<FString, FString>& NewLocks)
+{
+	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
+	NotifyChangedLocks(NewLocks, LockedFiles);
+	Swap(LockedFiles, NewLocks);
+	NewLocks.Reset();
+	LastUpdated = FDateTime::Now();
+}
+
+bool FGitLockedFilesCache::HasCacheExpired()
+{
+	return (FDateTime::Now() - LastUpdated) < CacheTimeout;
 }
 
 void FGitLockedFilesCache::OnFileLockChanged(const FString& filePath, const FString& lockUser, bool locked)
@@ -169,7 +208,11 @@ namespace GitSourceControlUtils
 				}
 			}
 		}
+#if ENGINE_MAJOR_VERSION >= 5
 		if (!PackageNotIncludedInGit.IsEmpty())
+#else
+		if (PackageNotIncludedInGit.Num() > 0)
+#endif
 		{
 			for (const FString& ToRemoveFile : PackageNotIncludedInGit)
 			{
@@ -1279,7 +1322,6 @@ static void ParseFileStatusResult(const FString& InPathToGitBinary, const FStrin
 	FGitSourceControlProvider& Provider = GitSourceControl->GetProvider();
 	const FString& LfsUserName = Provider.GetLockUser();
 
-	TMap<FString, FString> LockedFiles;
 	TMap<FString, FString> Results = InResults;
 	bool bCheckedLockedFiles = false;
 
@@ -1343,16 +1385,15 @@ static void ParseFileStatusResult(const FString& InPathToGitBinary, const FStrin
 				{
 					bCheckedLockedFiles = true;
 					TArray<FString> ErrorMessages;
-					GetAllLocks(InRepositoryRoot, InPathToGitBinary, ErrorMessages, LockedFiles);
+					RefreshLocks(InRepositoryRoot, InPathToGitBinary, ErrorMessages);
 					FTSMessageLog SourceControlLog("SourceControl");
 					for (int32 ErrorIndex = 0; ErrorIndex < ErrorMessages.Num(); ++ErrorIndex)
 					{
 						SourceControlLog.Error(FText::FromString(ErrorMessages[ErrorIndex]));
 					}
 				}
-				if (LockedFiles.Contains(File))
+				if (FGitLockedFilesCache::TryGetLockOwner(File, FileState.State.LockUser))
 				{
-					FileState.State.LockUser = LockedFiles[File];
 					if (LfsUserName == FileState.State.LockUser)
 					{
 						FileState.State.LockState = ELockState::Locked;
@@ -1449,8 +1490,12 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 
 	TArray<FString> ErrorMessages;
 
-	TArray<FString> Results;
+	TArray<FString> LogResults;
+	TArray<FString> DiffResults;
+	TArray<FString> Intersection;
+
 	TMap<FString, FString> NewerFiles;
+
 
 	//const TArray<FString>& RelativeFiles = RelativeFilenames(Files, InRepositoryRoot);
 	// Get the full remote status of the Content folder, since it's the only lockable folder we track in editor. 
@@ -1473,10 +1518,27 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 		// .. means commits in the right that are not in the left
 		ParametersLog[2] = FString::Printf(TEXT("..%s"), *Branch);
 
-		const bool bResultDiff = RunCommand(TEXT("log"), InPathToGitBinary, InRepositoryRoot, ParametersLog, FilesToDiff, Results, ErrorMessages);
-		if (bResultDiff)
+		const bool bResultLog = RunCommand(TEXT("log"), InPathToGitBinary, InRepositoryRoot, ParametersLog, FilesToDiff, LogResults, ErrorMessages);
+		if (bResultLog)
 		{
-			for (const FString& NewerFileName : Results)
+			// Status Branches may not be initialized because they're not in use by the project. They can also be not initilaized in some other quirky circumstances
+			// eg. When running multi client / dedicated server in editor without running them under the same process, those game instances will run as an editor instance
+			// which means editor plugins are enabled and running, but they don't run UnrealEdEngine, so the status branches are not initialized.
+			if (StatusBranches.Num() > 0)
+			{
+				// Check if the files state in the branch in which is changed is actually different from status branch
+				// This opens files for edit if they were modified in another branch but have since been reverted back to state in status.
+				TArray<FString> DiffParametersLog{ TEXT("--pretty="), TEXT("--name-only"), FString::Printf(TEXT("%s..%s"), *StatusBranches[0], *Branch), TEXT(""), TEXT("--") };
+				const bool bResultDiff = RunCommand(TEXT("diff"), InPathToGitBinary, InRepositoryRoot, DiffParametersLog, FilesToDiff, DiffResults, ErrorMessages);
+				// Get the intersection of the 2 containers
+				Intersection = DiffResults.FilterByPredicate([&LogResults](const FString& ChangedFile) { return LogResults.Contains(ChangedFile); });
+			}
+			else
+			{
+				Intersection = LogResults;
+			}
+
+			for (const FString& NewerFileName : Intersection)
 			{
 				// Don't care about mergeable files (.collection, .ini, .uproject, etc)
 				if (!IsFileLFSLockable(NewerFileName))
@@ -1496,7 +1558,9 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 				}
 			}
 		}
-		Results.Reset();
+		LogResults.Reset();
+		DiffResults.Reset();
+		Intersection.Reset();
 	}
 
 	for (const auto& NewFile : NewerFiles)
@@ -1511,10 +1575,15 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	OutErrorMessages.Append(ErrorMessages);
 }
 
-const FTimespan CacheLimit = FTimespan::FromSeconds(30);
-
-bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, TMap<FString, FString>& OutLocks, bool bInvalidateCache)
+void RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, bool bInvalidateCache)
 {
+	// Refresh could be called from multiple threads concurrently
+	// The NewLocks static here gets swapped with our locks cache, this is a static and not a member to avoid unnecessary allocations
+	// in large projects utilizing OFPA, the locks list could be potentially thousands of pairs of strings that get allocated and de-allocated every time we call this function
+	static TMap<FString, FString> NewLocks;
+	static FCriticalSection ConcurrencyProtection;
+	FScopeLock Lock(&ConcurrencyProtection);
+
 	// You may ask, why are we ignoring state cache, and instead maintaining our own lock cache?
 	// The answer is that state cache updating is another operation, and those that update status
 	// (and thus the state cache) are using GetAllLocks. However, querying remote locks are almost always
@@ -1524,13 +1593,9 @@ bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallba
 	// when we can easily maintain this cache here. So, we are really emulating an internal Git LFS locks cache
 	// call, which gets fed into the state cache, rather than reimplementing the state cache :)
 	const FDateTime CurrentTime = FDateTime::Now();
-	bool bCacheExpired = bInvalidateCache;
-	if (!bInvalidateCache)
-	{
-		const FTimespan CacheTimeElapsed = CurrentTime - FGitLockedFilesCache::LastUpdated;
-		bCacheExpired = CacheTimeElapsed > CacheLimit;
-	}
+	bool bCacheExpired = bInvalidateCache || FGitLockedFilesCache::HasCacheExpired();
 	bool bResult = false;
+
 	if (bCacheExpired)
 	{
 		// Our cache expired, or they asked us to expire cache. Query locks directly from the remote server.
@@ -1546,11 +1611,10 @@ bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallba
 #if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
 				UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
 #endif
-				OutLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
 			}
 			FGitLockedFilesCache::LastUpdated = CurrentTime;
-			FGitLockedFilesCache::SetLockedFiles(OutLocks);
-			return bResult;
+			FGitLockedFilesCache::SwapLockedFiles(NewLocks);
+			return;
 		}
 		// We tried to invalidate the UE cache, but we failed for some reason. Try updating lock state from LFS cache.
 		// Get the last known state of remote locks
@@ -1558,11 +1622,7 @@ bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallba
 		Params.Add(TEXT("--cached"));
 
 		FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
-		if (!GitSourceControl)
-		{
-			bResult = false;
-		}
-		else
+		if (GitSourceControl != nullptr)
 		{
 			FGitSourceControlProvider& Provider = GitSourceControl->GetProvider();
 			const FString& LockUser = Provider.GetLockUser();
@@ -1578,7 +1638,7 @@ bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallba
 				// Only update remote locks
 				if (LockFile.LockUser != LockUser)
 				{
-					OutLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
+					NewLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
 				}
 			}
 			// Get the latest local state of our own locks
@@ -1586,7 +1646,7 @@ bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallba
 			Params.Add(TEXT("--local"));
 
 			Results.Reset();
-			bResult &= RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, Params, FGitSourceControlModule::GetEmptyStringArray(), Results, OutErrorMessages);
+			bResult |= RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, Params, FGitSourceControlModule::GetEmptyStringArray(), Results, OutErrorMessages);
 			for (const FString& Result : Results)
 			{
 				FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
@@ -1596,18 +1656,16 @@ bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallba
 				// Only update local locks
 				if (LockFile.LockUser == LockUser)
 				{
-					OutLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
+					NewLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
 				}
+			}
+
+			if (bResult)
+			{
+				FGitLockedFilesCache::SwapLockedFiles(NewLocks);
 			}
 		}
 	}
-	if (!bResult)
-	{
-		// We can use our internally tracked local lock cache (an effective combination of --cached and --local)
-		OutLocks = FGitLockedFilesCache::GetLockedFiles();
-		bResult = true;
-	}
-	return bResult;
 }
 
 void GetLockedFiles(const TArray<FString>& InFiles, TArray<FString>& OutFiles)
@@ -1634,6 +1692,7 @@ FString GetFullPathFromGitStatus(const FString& Result, const FString& InReposit
 	return File;
 }
 
+#if ENGINE_MAJOR_VERSION == 5
 bool UpdateChangelistStateByCommand()
 {
 	// TODO: This is a temporary solution.
@@ -1687,6 +1746,7 @@ bool UpdateChangelistStateByCommand()
 	}
 	return true;
 }
+#endif
 	
 // Run a batch of Git "status" command to update status of given files and/or directories.
 bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const bool InUsingLfsLocking, const TArray<FString>& InFiles,
@@ -1718,14 +1778,17 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
 	{
 		ParseStatusResults(InPathToGitBinary, InRepositoryRoot, InUsingLfsLocking, RepoFiles, ResultsMap, OutStates);
 	}
-	
+
+#if ENGINE_MAJOR_VERSION == 5
 	UpdateChangelistStateByCommand();
+#endif
 
 	CheckRemote(InPathToGitBinary, InRepositoryRoot, RepoFiles, OutErrorMessages, OutStates);
 
 	return bResult;
 }
 
+#if ENGINE_MAJOR_VERSION == 5
 void UpdateFileStagingOnSaved(const FString& Filename, UPackage* Pkg, FObjectPostSaveContext ObjectSaveContext)
 {
 	UpdateFileStagingOnSavedInternal(Filename);
@@ -1753,6 +1816,7 @@ bool UpdateFileStagingOnSavedInternal(const FString& Filename)
 	
 	return bResult;
 }
+#endif
 	
 void UpdateStateOnAssetRename(const FAssetData& InAssetData, const FString& InOldName)
 {
@@ -1763,8 +1827,12 @@ void UpdateStateOnAssetRename(const FAssetData& InAssetData, const FString& InOl
 		return ;
 	}
 	TSharedRef<FGitSourceControlState, ESPMode::ThreadSafe> State = Provider.GetStateInternal(InOldName);	
-	
+
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 1
 	State->LocalFilename = InAssetData.GetObjectPathString();
+#else
+	State->LocalFilename = InAssetData.ObjectPath.ToString();
+#endif
 }
 
 // Run a Git `cat-file --filters` command to dump the binary content of a revision into a file.
@@ -1836,65 +1904,20 @@ bool RunDumpToFile(const FString& InPathToGitBinary, const FString& InRepository
 		FPlatformProcess::Sleep(0.01f);
 
 		TArray<uint8> BinaryFileContent;
-		bool bRemovedLFSMessage = false;
-		while (FPlatformProcess::IsProcRunning(ProcessHandle))
+		bool bShouldContinue = true;
+		while (FPlatformProcess::IsProcRunning(ProcessHandle) || bShouldContinue)
 		{
 			TArray<uint8> BinaryData;
-			FPlatformProcess::ReadPipeToArray(PipeRead, BinaryData);
+			bShouldContinue = FPlatformProcess::ReadPipeToArray(PipeRead, BinaryData);
 			if (BinaryData.Num() > 0)
 			{
-				if (GitSourceControl.AccessSettings().IsUsingGitLfsLocking())
-				{
-					// @todo: this is hacky!
-					if (BinaryData[0] == 68) // Check for D in "Downloading"
-					{
-						if (BinaryData[BinaryData.Num() - 1] == 10) // Check for newline
-						{
-							BinaryData.Reset();
-							bRemovedLFSMessage = true;
-						}
-					}
-					else
-					{
-						BinaryFileContent.Append(MoveTemp(BinaryData));
-					}
-				}
-				else
-				{
-					BinaryFileContent.Append(MoveTemp(BinaryData));
-				}
-			}
-		}
-		TArray<uint8> BinaryData;
-		FPlatformProcess::ReadPipeToArray(PipeRead, BinaryData);
-		if (BinaryData.Num() > 0)
-		{
-			if (GitSourceControl.AccessSettings().IsUsingGitLfsLocking())
-			{
 				// @todo: this is hacky!
-				if (!bRemovedLFSMessage && BinaryData[0] == 68) // Check for D in "Downloading"
+				bool bIsLFSMessage = BinaryData[0] == 68 // Check for D in "Downloading"
+									&& BinaryData.Last() == 10; // Check for new line
+				if (GitSourceControl.AccessSettings().IsUsingGitLfsLocking() && bIsLFSMessage)
 				{
-					int32 NewLineIndex = 0;
-					for (int32 Index = 0; Index < BinaryData.Num(); Index++)
-					{
-						if (BinaryData[Index] == 10) // Check for newline
-						{
-							NewLineIndex = Index;
-							break;
-						}
-					}
-					if (NewLineIndex > 0)
-					{
-						BinaryData.RemoveAt(0, NewLineIndex + 1);
-					}
+					continue;
 				}
-				else
-				{
-					BinaryFileContent.Append(MoveTemp(BinaryData));
-				}
-			}
-			else
-			{
 				BinaryFileContent.Append(MoveTemp(BinaryData));
 			}
 		}
@@ -2363,6 +2386,7 @@ bool CheckLFSLockable(const FString& InPathToGitBinary, const FString& InReposit
 {
 	TArray<FString> Results;
 	TArray<FString> Parameters;
+	LockableTypes.Empty(); // clear previous results
 	Parameters.Add(TEXT("lockable")); // follow file renames
 
 	const bool bResults = RunCommand(TEXT("check-attr"), InPathToGitBinary, InRepositoryRoot, Parameters, InFiles, Results, OutErrorMessages);
@@ -2389,8 +2413,7 @@ bool FetchRemote(const FString& InPathToGitBinary, const FString& InPathToReposi
 	// Force refresh lock states
 	if (InUsingGitLfsLocking)
 	{
-		TMap<FString, FString> Locks;
-		GetAllLocks(InPathToRepositoryRoot, InPathToGitBinary, OutErrorMessages, Locks, true);
+		RefreshLocks(InPathToRepositoryRoot, InPathToGitBinary, OutErrorMessages, true);
 	}
 	TArray<FString> Params{"--no-tags"};
 	// fetch latest repo
@@ -2399,6 +2422,31 @@ bool FetchRemote(const FString& InPathToGitBinary, const FString& InPathToReposi
 	Params.Add(TEXT("--prune"));
 	return RunCommand(TEXT("fetch"), InPathToGitBinary, InPathToRepositoryRoot, Params,
 					  FGitSourceControlModule::GetEmptyStringArray(), OutResults, OutErrorMessages);
+}
+
+bool GetNumRevisionsBehindOrigin(const FString& InPathToGitBinary, const FString& InRepositoryRoot, int& NumRevisionsBehind, TArray<FString>& OutErrorMessages)
+{
+	TArray<FString> OutResults;
+	TArray<FString> OutErrorMesssages;
+	TArray<FString> Params{ "--abbrev-ref HEAD" };
+	bool success = RunCommand(TEXT("rev-parse"), InPathToGitBinary, InRepositoryRoot, Params, FGitSourceControlModule::GetEmptyStringArray(), OutResults, OutErrorMesssages);
+	if (!success)
+	{
+		return false;
+	}
+
+	const FString BranchRef = OutResults[0];
+	Params = { FString::Printf(TEXT("--count HEAD..origin/%s"), *BranchRef) };
+	OutResults.Empty();
+	success = RunCommand(TEXT("rev-list"), InPathToGitBinary, InRepositoryRoot, Params, FGitSourceControlModule::GetEmptyStringArray(), OutResults, OutErrorMesssages);
+	if (!success)
+	{
+		return false;
+	}
+
+	const FString Number = OutResults[0];
+	NumRevisionsBehind = FCString::Atoi(*OutResults[0]);
+	return true;
 }
 
 bool PullOrigin(const FString& InPathToGitBinary, const FString& InPathToRepositoryRoot, const TArray<FString>& InFiles, TArray<FString>& OutFiles,

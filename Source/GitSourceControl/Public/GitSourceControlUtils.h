@@ -7,7 +7,10 @@
 
 #include "GitSourceControlRevision.h"
 #include "GitSourceControlState.h"
+#include "Runtime/Launch/Resources/Version.h"
+#if ENGINE_MAJOR_VERSION == 5
 #include "UObject/ObjectSaveContext.h"
+#endif
 
 class FGitSourceControlState;
 
@@ -40,16 +43,27 @@ class FGitLockedFilesCache
 {
 public:
 	static FDateTime LastUpdated;
+	static FCriticalSection LockedFilesLock;
 
- static const TMap<FString, FString>& GetLockedFiles() { return LockedFiles; }
- static void SetLockedFiles(const TMap<FString, FString>& newLocks);
- static void AddLockedFile(const FString& filePath, const FString& lockUser);
- static void RemoveLockedFile(const FString& filePath);
+	static const TMap<FString, FString>& GetLockedFiles() { return LockedFiles; }
+	static void AddLockedFile(const FString& filePath, const FString& lockUser);
+	static void RemoveLockedFile(const FString& filePath);
+
+	static bool Contains(const FString& filePath);
+	static bool TryGetLockOwner(const FString& filePath, FString& outLockOwner);
+
+	static void SwapLockedFiles(TMap<FString, FString>& NewLocks);
+
+	static bool HasCacheExpired();
 
 private:
- static void OnFileLockChanged(const FString& filePath, const FString& lockUser, bool locked);
- // update local read/write state when our own lock statuses change
+	static void NotifyChangedLocks(const TMap<FString, FString>& newLocks, const TMap<FString, FString>& oldLocks);
+
+	// update local file readonly state when our own lock statuses change
+	static void OnFileLockChanged(const FString& filePath, const FString& lockUser, bool locked);
+
 	static TMap<FString, FString> LockedFiles;
+	static FTimespan CacheTimeout;
 };
 
 namespace GitSourceControlUtils
@@ -246,7 +260,8 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
  */
 bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const bool InUsingLfsLocking, const TArray<FString>& InFiles,
 					 TArray<FString>& OutErrorMessages, TMap<FString, FGitSourceControlState>& OutStates);
-	
+
+#if ENGINE_MAJOR_VERSION == 5
 /**
  * Keep Consistency of being file staged
  *
@@ -255,7 +270,8 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
  * @param   ObjectSaveContext	Context for save (for adapting delegate)
  */
 void UpdateFileStagingOnSaved(const FString& Filename, UPackage* Pkg, FObjectPostSaveContext ObjectSaveContext);
-	
+#endif
+
 /**
  * Keep Consistency of being file staged with simple argument
  *
@@ -271,7 +287,8 @@ bool UpdateFileStagingOnSavedInternal(const FString& Filename);
  * @param   ObjectSaveContext	Context for save (for adapting delegate)
  */    
 void UpdateStateOnAssetRename(const FAssetData& InAssetData, const FString& InOldName);
-	
+
+#if ENGINE_MAJOR_VERSION == 5
 /**
  * 
  *
@@ -280,6 +297,7 @@ void UpdateStateOnAssetRename(const FAssetData& InAssetData, const FString& InOl
  * @param   ObjectSaveContext	Context for save (for adapting delegate)
  */
 bool UpdateChangelistStateByCommand();
+#endif
 	
 /**
  * Run a Git "cat-file" command to dump the binary content of a revision into a file.
@@ -346,16 +364,15 @@ GITSOURCECONTROL_API bool CollectNewStates( const TMap< FString, FGitSourceContr
  */
 bool CollectNewStates(const TArray<FString>& InFiles, TMap<const FString, FGitState>& OutResults, EFileState::Type FileState, ETreeState::Type TreeState = ETreeState::Unset, ELockState::Type LockState = ELockState::Unset, ERemoteState::Type RemoteState = ERemoteState::Unset);
 
-	/**
-		 * Run 'git lfs locks" to extract all lock information for all files in the repository
-		 *
-		 * @param	InRepositoryRoot	The Git repository from where to run the command - usually the Game directory
-		 * @param   GitBinaryFallBack   The Git binary fallback path
-		 * @param	OutErrorMessages    Any errors (from StdErr) as an array per-line
-		 * @param	OutLocks		    The lock results (file, username)
-		 * @returns true if the command succeeded and returned no errors
-		 */
-	bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallBack, TArray<FString>& OutErrorMessages, TMap<FString, FString>& OutLocks, bool bInvalidateCache = false);
+/**
+	* Run "git lfs locks" to update lock states if it hasn't been run recently - if it has been run recently, this function is a no-op
+	*
+	* @param	InRepositoryRoot	The Git repository from where to run the command - usually the Game directory
+	* @param   GitBinaryFallBack   The Git binary fallback path
+	* @param	OutErrorMessages    Any errors (from StdErr) as an array per-line
+	* @param	bInvalidateCache	Force refresh the lock states from the server using git lfs locks regardless of when we last refreshed the cache.
+*/
+void RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallBack, TArray<FString>& OutErrorMessages, bool bInvalidateCache = false);
 
 /**
  * Gets locks from state cache
@@ -373,6 +390,8 @@ bool IsFileLFSLockable(const FString& InFile);
 bool CheckLFSLockable(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& InFiles, TArray<FString>& OutErrorMessages);
 
 GITSOURCECONTROL_API bool FetchRemote( const FString & InPathToGitBinary, const FString & InPathToRepositoryRoot, bool InUsingGitLfsLocking, TArray< FString > & OutResults, TArray< FString > & OutErrorMessages );
+
+bool GetNumRevisionsBehindOrigin(const FString& InPathToGitBinary, const FString& InRepositoryRoot, int& NumRevisionsBehind, TArray<FString>& OutErrorMessages);
 
 bool PullOrigin(const FString& InPathToGitBinary, const FString& InPathToRepositoryRoot, const TArray<FString>& InFiles, TArray<FString>& OutFiles,
 				TArray<FString>& OutResults, TArray<FString>& OutErrorMessages);
