@@ -83,7 +83,7 @@ FDateTime FGitLockedFilesCache::LastUpdated = FDateTime::MinValue();
 TMap<FString, FString> FGitLockedFilesCache::LockedFiles = TMap<FString, FString>();
 
 void FGitLockedFilesCache::SetLockedFiles(const TMap<FString, FString>& newLocks)
-{	
+{
 	for (auto lock : LockedFiles)
 	{
 		if (!newLocks.Contains(lock.Key))
@@ -91,13 +91,13 @@ void FGitLockedFilesCache::SetLockedFiles(const TMap<FString, FString>& newLocks
 			OnFileLockChanged(lock.Key, lock.Value, false);
 		}
 	}
-	
+
 	for (auto lock : newLocks)
-	{		
+	{
 		if (!LockedFiles.Contains(lock.Key))
 		{
 			OnFileLockChanged(lock.Key, lock.Value, true);
-		}		
+		}
 	}
 
 	LockedFiles = newLocks;
@@ -121,7 +121,7 @@ void FGitLockedFilesCache::OnFileLockChanged(const FString& filePath, const FStr
 	const FString& LfsUserName = FGitSourceControlModule::Get().GetProvider().GetLockUser();
 	if (LfsUserName == lockUser)
 	{
-		FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*filePath, !locked);		
+		FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*filePath, !locked);
 	}
 }
 
@@ -151,7 +151,7 @@ namespace GitSourceControlUtils
 
 					break;
 				}
-				
+
 				FString GitTestPath = TestPath + "/.git";
 				if (FPaths::FileExists(GitTestPath) || FPaths::DirectoryExists(GitTestPath))
 				{
@@ -653,7 +653,7 @@ bool GetBranchName(const FString& InPathToGitBinary, const FString& InRepository
 		OutBranchName = Provider.GetBranchName();
 		return true;
 	}
-	
+
 	bool bResults;
 	TArray<FString> InfoMessages;
 	TArray<FString> ErrorMessages;
@@ -746,9 +746,9 @@ bool GetRemoteBranchesWildcard(const FString& InPathToGitBinary, const FString& 
 			bRunOnce = false;
 		}
 	}
-	return bResults;	
+	return bResults;
 }
-	
+
 bool GetCommitInfo(const FString& InPathToGitBinary, const FString& InRepositoryRoot, FString& OutCommitId, FString& OutCommitSummary)
 {
 	bool bResults;
@@ -922,7 +922,7 @@ public:
 	{
 		TArray<FString> Informations;
 		InStatus.ParseIntoArray(Informations, TEXT("\t"), true);
-		
+
 		if (Informations.Num() >= 2)
 		{
 			Informations[0].TrimEndInline(); // Trim whitespace from the end of the filename
@@ -1374,8 +1374,8 @@ static void ParseFileStatusResult(const FString& InPathToGitBinary, const FStrin
 			{
 				FileState.State.LockState = ELockState::Unlockable;
 			}
-			
-			
+
+
 #if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
 			UE_LOG(LogSourceControl, Log, TEXT("Status(%s) Locked by '%s'"), *File, *FileState.State.LockUser);
 #endif
@@ -1453,7 +1453,7 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	TMap<FString, FString> NewerFiles;
 
 	//const TArray<FString>& RelativeFiles = RelativeFilenames(Files, InRepositoryRoot);
-	// Get the full remote status of the Content folder, since it's the only lockable folder we track in editor. 
+	// Get the full remote status of the Content folder, since it's the only lockable folder we track in editor.
 	// This shows any new files as well.
 	// Also update the status of `.checksum`.
 	TArray<FString> FilesToDiff{FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()), ".checksum", "Binaries/", "Plugins/"};
@@ -1645,7 +1645,7 @@ bool UpdateChangelistStateByCommand()
 		UE_LOG(LogSourceControl, Warning, TEXT("GitSourceControl module is not loaded."));
 		return false;
 	}
-	
+
 	FGitSourceControlModule& GitSourceControl = FModuleManager::GetModuleChecked<FGitSourceControlModule>("GitSourceControl");
 	FGitSourceControlProvider& Provider = GitSourceControl.GetProvider();
 	if (!Provider.IsGitAvailable())
@@ -1687,7 +1687,7 @@ bool UpdateChangelistStateByCommand()
 	}
 	return true;
 }
-	
+
 // Run a batch of Git "status" command to update status of given files and/or directories.
 bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const bool InUsingLfsLocking, const TArray<FString>& InFiles,
 					 TArray<FString>& OutErrorMessages, TMap<FString, FGitSourceControlState>& OutStates)
@@ -1718,7 +1718,7 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
 	{
 		ParseStatusResults(InPathToGitBinary, InRepositoryRoot, InUsingLfsLocking, RepoFiles, ResultsMap, OutStates);
 	}
-	
+
 	UpdateChangelistStateByCommand();
 
 	CheckRemote(InPathToGitBinary, InRepositoryRoot, RepoFiles, OutErrorMessages, OutStates);
@@ -1730,7 +1730,7 @@ void UpdateFileStagingOnSaved(const FString& Filename, UPackage* Pkg, FObjectPos
 {
 	UpdateFileStagingOnSavedInternal(Filename);
 }
-	
+
 bool UpdateFileStagingOnSavedInternal(const FString& Filename)
 {
 	bool bResult = false;
@@ -1750,10 +1750,10 @@ bool UpdateFileStagingOnSavedInternal(const FString& Filename)
 		TArray<FString> DummyMsgs;
 		bResult = RunCommand(TEXT("add"), Provider.GetGitBinaryPath(), Provider.GetPathToRepositoryRoot(), FGitSourceControlModule::GetEmptyStringArray(), File, DummyResults, DummyMsgs);
 	}
-	
+
 	return bResult;
 }
-	
+
 void UpdateStateOnAssetRename(const FAssetData& InAssetData, const FString& InOldName)
 {
 	FGitSourceControlModule& GitSourceControl = FModuleManager::GetModuleChecked<FGitSourceControlModule>("GitSourceControl");
@@ -1762,8 +1762,8 @@ void UpdateStateOnAssetRename(const FAssetData& InAssetData, const FString& InOl
 	{
 		return ;
 	}
-	TSharedRef<FGitSourceControlState, ESPMode::ThreadSafe> State = Provider.GetStateInternal(InOldName);	
-	
+	TSharedRef<FGitSourceControlState, ESPMode::ThreadSafe> State = Provider.GetStateInternal(InOldName);
+
 	State->LocalFilename = InAssetData.GetObjectPathString();
 }
 
@@ -2194,7 +2194,7 @@ bool UpdateCachedStates(const TMap<const FString, FGitState>& InResults)
 	{
 		return false;
 	}
-	
+
 	FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
 	if (!GitSourceControl)
 	{
@@ -2256,7 +2256,7 @@ bool CollectNewStates(const TMap<FString, FGitSourceControlState>& InStates, TMa
 	{
 		return false;
 	}
-	
+
 	for (const auto& InState : InStates)
 	{
 		OutResults.Add(InState.Key, InState.Value.State);
@@ -2413,7 +2413,7 @@ bool PullOrigin(const FString& InPathToGitBinary, const FString& InPathToReposit
 		FText PullFailTitle(LOCTEXT("Git_NeedBinariesUpdate_Title", "Binaries Update Required"));
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 3
 		FMessageDialog::Open(EAppMsgType::Ok, PullFailMessage, PullFailTitle);
-#else		
+#else
 		FMessageDialog::Open(EAppMsgType::Ok, PullFailMessage, &PullFailTitle);
 #endif
 		UE_LOG(LogSourceControl, Log, TEXT("Pull failed because we need a binaries update"));
