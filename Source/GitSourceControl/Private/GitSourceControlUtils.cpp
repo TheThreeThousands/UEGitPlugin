@@ -1607,7 +1607,8 @@ void RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallb
 				FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
 #if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
 				UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
-#endif
+#endif	
+				NewLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
 			}
 			FGitLockedFilesCache::LastUpdated = CurrentTime;
 			FGitLockedFilesCache::SwapLockedFiles(NewLocks);
