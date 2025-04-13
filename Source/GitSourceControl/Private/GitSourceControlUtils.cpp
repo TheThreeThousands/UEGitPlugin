@@ -80,89 +80,35 @@ const FString& FGitScopedTempFile::GetFilename() const
 	return Filename;
 }
 
-FDateTime FGitLockedFilesCache::LastUpdated = FDateTime::MinValue();
-TMap<FString, FString> FGitLockedFilesCache::LockedFiles = TMap<FString, FString>();
-FCriticalSection FGitLockedFilesCache::LockedFilesLock = FCriticalSection();
-FTimespan FGitLockedFilesCache::CacheTimeout = FTimespan::FromSeconds(30);
-
-void FGitLockedFilesCache::NotifyChangedLocks(const TMap<FString, FString>& newLocks, const TMap<FString, FString>& oldLocks)
-{	
-	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
-
-	for (const auto& lock : oldLocks)
-	{
-		if (!newLocks.Contains(lock.Key))
-		{
-			OnFileLockChanged(lock.Key, lock.Value, false);
-		}
-	}
-	
-	for (const auto& lock : newLocks)
-	{		
-		if (!oldLocks.Contains(lock.Key))
-		{
-			OnFileLockChanged(lock.Key, lock.Value, true);
-		}		
-	}
-}
-
-void FGitLockedFilesCache::AddLockedFile(const FString& filePath, const FString& lockUser)
-{
-	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
-	LockedFiles.Add(filePath, lockUser);
-	OnFileLockChanged(filePath, lockUser, true);
-}
-
-void FGitLockedFilesCache::RemoveLockedFile(const FString& filePath)
-{
-	FString user;
-	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
-	LockedFiles.RemoveAndCopyValue(filePath, user);
-	OnFileLockChanged(filePath, user, false);
-}
-
-bool FGitLockedFilesCache::Contains(const FString& filePath)
-{
-	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
-	return LockedFiles.Contains(filePath);
-}
-
-bool FGitLockedFilesCache::TryGetLockOwner(const FString& filePath, FString& outLockOwner)
-{
-	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
-	if (LockedFiles.Contains(filePath))
-	{
-		outLockOwner = LockedFiles[filePath];
-		return true;
-	}
-	return false;
-}
-
-void FGitLockedFilesCache::SwapLockedFiles(TMap<FString, FString>& NewLocks)
-{
-	FScopeLock Lock(&FGitLockedFilesCache::LockedFilesLock);
-	NotifyChangedLocks(NewLocks, LockedFiles);
-	Swap(LockedFiles, NewLocks);
-	NewLocks.Reset();
-	LastUpdated = FDateTime::Now();
-}
-
-bool FGitLockedFilesCache::HasCacheExpired()
-{
-	return (FDateTime::Now() - LastUpdated) < CacheTimeout;
-}
-
-void FGitLockedFilesCache::OnFileLockChanged(const FString& filePath, const FString& lockUser, bool locked)
-{
-	const FString& LfsUserName = FGitSourceControlModule::Get().GetProvider().GetLockUser();
-	if (LfsUserName == lockUser)
-	{
-		FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*filePath, !locked);		
-	}
-}
-
 namespace GitSourceControlUtils
 {
+	FGitLfsLocksParser::FGitLfsLocksParser(const FString& InRepositoryRoot, const FString& InStatus, const bool bAbsolutePaths)
+	{
+		TArray<FString> Informations;
+		InStatus.ParseIntoArray(Informations, TEXT("\t"), true);
+
+		if (Informations.Num() >= 2)
+		{
+			Informations[0].TrimEndInline(); // Trim whitespace from the end of the filename
+			Informations[1].TrimEndInline(); // Trim whitespace from the end of the username
+			if (bAbsolutePaths)
+				LocalFilename = FPaths::ConvertRelativePathToFull(InRepositoryRoot, Informations[0]);
+			else
+				LocalFilename = Informations[0];
+			// Filename ID (or we expect it to be the username, but it's empty, or is the ID, we have to assume it's the current user)
+			if (Informations.Num() == 2 || Informations[1].IsEmpty() || Informations[1].StartsWith(TEXT("ID:")))
+			{
+				// TODO: thread safety
+				LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
+			}
+			// Filename Username ID
+			else
+			{
+				LockUser = MoveTemp(Informations[1]);
+			}
+		}
+	}
+
 	FString ChangeRepositoryRootIfSubmodule(TArray<FString>& AbsoluteFilePaths, const FString& PathToRepositoryRoot)
 	{
 		FString Ret = PathToRepositoryRoot;
@@ -948,50 +894,6 @@ bool RunCommit(const FString& InPathToGitBinary, const FString& InRepositoryRoot
 }
 
 /**
- * Parse informations on a file locked with Git LFS
- *
- * Examples output of "git lfs locks":
-Content\ThirdPersonBP\Blueprints\ThirdPersonCharacter.uasset    SRombauts       ID:891
-Content\ThirdPersonBP\Blueprints\ThirdPersonCharacter.uasset                    ID:891
-Content\ThirdPersonBP\Blueprints\ThirdPersonCharacter.uasset    ID:891
- */
-class FGitLfsLocksParser
-{
-public:
-	FGitLfsLocksParser(const FString& InRepositoryRoot, const FString& InStatus, const bool bAbsolutePaths = true)
-	{
-		TArray<FString> Informations;
-		InStatus.ParseIntoArray(Informations, TEXT("\t"), true);
-		
-		if (Informations.Num() >= 2)
-		{
-			Informations[0].TrimEndInline(); // Trim whitespace from the end of the filename
-			Informations[1].TrimEndInline(); // Trim whitespace from the end of the username
-			if (bAbsolutePaths)
-				LocalFilename = FPaths::ConvertRelativePathToFull(InRepositoryRoot, Informations[0]);
-			else
-				LocalFilename = Informations[0];
-			// Filename ID (or we expect it to be the username, but it's empty, or is the ID, we have to assume it's the current user)
-			if (Informations.Num() == 2 || Informations[1].IsEmpty() || Informations[1].StartsWith(TEXT("ID:")))
-			{
-				// TODO: thread safety
-				LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
-			}
-			// Filename Username ID
-			else
-			{
-				LockUser = MoveTemp(Informations[1]);
-			}
-		}
-	}
-
-	// Filename on disk
-	FString LocalFilename;
-	// Name of user who has file locked
-	FString LockUser;
-};
-
-/**
  * @brief Extract the relative filename from a Git status result.
  *
  * Examples of status results:
@@ -1286,7 +1188,7 @@ static void ParseDirectoryStatusResult(const bool InUsingLfsLocking, const TMap<
 		FGitSourceControlState FileState(Result.Key);
 		if (!InUsingLfsLocking)
 		{
-			FileState.State.LockState = ELockState::Unlockable;
+			FileState.State.LockState = ELockState::NotLockable;
 		}
 		FGitStatusParser StatusParser(Result.Value);
 		if ((EFileState::Deleted == StatusParser.FileState) || (EFileState::Missing == StatusParser.FileState) || (ETreeState::Untracked == StatusParser.TreeState))
@@ -1372,51 +1274,18 @@ static void ParseFileStatusResult(const FString& InPathToGitBinary, const FStrin
 		}
 		if (!InUsingLfsLocking)
 		{
-			FileState.State.LockState = ELockState::Unlockable;
+			FileState.State.LockState = ELockState::NotLockable;
 		}
 		else
 		{
 			if (IsFileLFSLockable(File))
 			{
-				if (!bCheckedLockedFiles)
-				{
-					bCheckedLockedFiles = true;
-					TArray<FString> ErrorMessages;
-					RefreshLocks(InRepositoryRoot, InPathToGitBinary, ErrorMessages);
-					FTSMessageLog SourceControlLog("SourceControl");
-					for (int32 ErrorIndex = 0; ErrorIndex < ErrorMessages.Num(); ++ErrorIndex)
-					{
-						SourceControlLog.Error(FText::FromString(ErrorMessages[ErrorIndex]));
-					}
-				}
-				if (FGitLockedFilesCache::TryGetLockOwner(File, FileState.State.LockUser))
-				{
-					if (LfsUserName == FileState.State.LockUser)
-					{
-						FileState.State.LockState = ELockState::Locked;
-					}
-					else
-					{
-						FileState.State.LockState = ELockState::LockedOther;
-					}
-				}
-				else
-				{
-					FileState.State.LockState = ELockState::NotLocked;
-#if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
-					UE_LOG(LogSourceControl, Log, TEXT("Status(%s) Not Locked"), *File);
-#endif
-				}
+				FileState.State.LockState = ELockState::Unknown;
 			}
 			else
 			{
-				FileState.State.LockState = ELockState::Unlockable;
+				FileState.State.LockState = ELockState::NotLockable;
 			}
-			
-			
-#if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
-			UE_LOG(LogSourceControl, Log, TEXT("Status(%s) Locked by '%s'"), *File, *FileState.State.LockUser);
-#endif
 		}
 		OutStates.Add(File, MoveTemp(FileState));
 	}
@@ -1572,7 +1441,7 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	OutErrorMessages.Append(ErrorMessages);
 }
 
-void RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, bool bInvalidateCache)
+void RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, TMap<const FString, FGitState>& OutStates)
 {
 	// Refresh could be called from multiple threads concurrently
 	// The NewLocks static here gets swapped with our locks cache, this is a static and not a member to avoid unnecessary allocations
@@ -1589,79 +1458,25 @@ void RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallb
 	// as you will see below, we use only for offline cases, but the exec cost of doing this isn't worth it
 	// when we can easily maintain this cache here. So, we are really emulating an internal Git LFS locks cache
 	// call, which gets fed into the state cache, rather than reimplementing the state cache :)
-	const FDateTime CurrentTime = FDateTime::Now();
-	bool bCacheExpired = bInvalidateCache || FGitLockedFilesCache::HasCacheExpired();
-	bool bResult = false;
 
-	if (bCacheExpired)
+	TArray<FString> ErrorMessages;
+	TArray<FString> Results;
+	bool bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, FGitSourceControlModule::GetEmptyStringArray(), FGitSourceControlModule::GetEmptyStringArray(),
+							Results, OutErrorMessages);
+	if (bResult)
 	{
-		// Our cache expired, or they asked us to expire cache. Query locks directly from the remote server.
-		TArray<FString> ErrorMessages;
-		TArray<FString> Results;
-		bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, FGitSourceControlModule::GetEmptyStringArray(), FGitSourceControlModule::GetEmptyStringArray(),
-								Results, OutErrorMessages);
-		if (bResult)
+		const FString& LfsUserName = FGitSourceControlModule::Get().GetProvider().GetLockUser();
+
+		for (const FString& Result : Results)
 		{
-			for (const FString& Result : Results)
-			{
-				FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
+			FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
 #if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
-				UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
+			UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
 #endif	
-				NewLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
-			}
-			FGitLockedFilesCache::LastUpdated = CurrentTime;
-			FGitLockedFilesCache::SwapLockedFiles(NewLocks);
-			return;
-		}
-		// We tried to invalidate the UE cache, but we failed for some reason. Try updating lock state from LFS cache.
-		// Get the last known state of remote locks
-		TArray<FString> Params;
-		Params.Add(TEXT("--cached"));
+			FGitState& State = OutStates.FindOrAdd(LockFile.LocalFilename);
 
-		FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
-		if (GitSourceControl != nullptr)
-		{
-			FGitSourceControlProvider& Provider = GitSourceControl->GetProvider();
-			const FString& LockUser = Provider.GetLockUser();
-
-			Results.Reset();
-			bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, Params, FGitSourceControlModule::GetEmptyStringArray(), Results, OutErrorMessages);
-			for (const FString& Result : Results)
-			{
-				FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
-	#if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
-				UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
-	#endif
-				// Only update remote locks
-				if (LockFile.LockUser != LockUser)
-				{
-					NewLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
-				}
-			}
-			// Get the latest local state of our own locks
-			Params.Reset(1);
-			Params.Add(TEXT("--local"));
-
-			Results.Reset();
-			bResult |= RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, Params, FGitSourceControlModule::GetEmptyStringArray(), Results, OutErrorMessages);
-			for (const FString& Result : Results)
-			{
-				FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
-	#if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
-				UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
-	#endif
-				// Only update local locks
-				if (LockFile.LockUser == LockUser)
-				{
-					NewLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
-				}
-			}
-
-			if (bResult)
-			{
-				FGitLockedFilesCache::SwapLockedFiles(NewLocks);
-			}
+			State.LockState = LockFile.LockUser == LfsUserName ? ELockState::Locked : ELockState::LockedOther;
+			State.LockUser = LockFile.LockUser;
 		}
 	}
 }
@@ -2408,16 +2223,7 @@ bool CheckLFSLockable(const FString& InPathToGitBinary, const FString& InReposit
 
 bool FetchRemote(const FString& InPathToGitBinary, const FString& InPathToRepositoryRoot, bool InUsingGitLfsLocking, TArray<FString>& OutResults, TArray<FString>& OutErrorMessages)
 {
-	// Force refresh lock states
-	if (InUsingGitLfsLocking)
-	{
-		RefreshLocks(InPathToRepositoryRoot, InPathToGitBinary, OutErrorMessages, true);
-	}
 	TArray<FString> Params{"--no-tags"};
-	// fetch latest repo
-	// TODO specify branches?
-
-	Params.Add(TEXT("--prune"));
 	return RunCommand(TEXT("fetch"), InPathToGitBinary, InPathToRepositoryRoot, Params,
 					  FGitSourceControlModule::GetEmptyStringArray(), OutResults, OutErrorMessages);
 }

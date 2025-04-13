@@ -12,6 +12,7 @@
 #include "GitSourceControlModule.h"
 #include "GitSourceControlCommand.h"
 #include "GitSourceControlUtils.h"
+#include "GitSourceControlState.h"
 #include "SourceControlHelpers.h"
 #include "Logging/MessageLog.h"
 #include "Misc/MessageDialog.h"
@@ -127,21 +128,42 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 	const bool bSuccess = GitSourceControlUtils::RunLFSCommand(TEXT("lock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), LockableRelativeFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 	InCommand.bCommandSuccessful = bSuccess;
 	const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
+
+	TArray<FString> AbsoluteFiles;
+	AbsoluteFiles.Reserve(LockableRelativeFiles.Num());
+	FString GitPath = InCommand.PathToGitRoot;
+	Algo::Transform(LockableRelativeFiles, AbsoluteFiles, [&InCommand](const FString& RelativeFile)
+		{
+			FString AbsoluteFilePath = FPaths::Combine(InCommand.PathToGitRoot, RelativeFile);
+			FPaths::NormalizeFilename(AbsoluteFilePath);
+			return AbsoluteFilePath;
+		});
+
 	if (bSuccess)
 	{
-		TArray<FString> AbsoluteFiles;
-		for (const auto& RelativeFile : RelativeFiles)
+		for (const FString& AboluteFile : AbsoluteFiles)
 		{
-			FString AbsoluteFile = FPaths::Combine(InCommand.PathToGitRoot, RelativeFile);
-			FGitLockedFilesCache::AddLockedFile(AbsoluteFile, LockUser);
-			FPaths::NormalizeFilename(AbsoluteFile);
-			AbsoluteFiles.Add(AbsoluteFile);
+			FGitState& State = States.FindOrAdd(AboluteFile);
+			State.LockState = ELockState::Locked;
+			State.LockUser = LockUser;
 		}
-
-		GitSourceControlUtils::CollectNewStates(AbsoluteFiles, States, EFileState::Unset, ETreeState::Unset, ELockState::Locked);
-		for (auto& State : States)
+	}
+	else
+	{
+		// TODO: If we're checking out multiple files it's probably more optimal to run a broad git lfs locks here rather than per file
+		// but in the case of a single checkout, it's faster to run it for the specific file, which is the common case?
+		TArray<FString> Parameters { "-p" };
+		for (const FString& RelativeFile : LockableRelativeFiles)
 		{
-			State.Value.LockUser = LockUser;
+			const bool bLockCheckSucceeded = GitSourceControlUtils::RunLFSCommand(TEXT("locks"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, Parameters, { RelativeFile }, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+			if (bLockCheckSucceeded)
+			{
+				GitSourceControlUtils::FGitLfsLocksParser LockInfo(InCommand.PathToRepositoryRoot, *InCommand.ResultInfo.InfoMessages.rend());
+
+				FGitState& State = States.FindOrAdd(LockInfo.LocalFilename);
+				State.LockState = LockInfo.LockUser == LockUser ? ELockState::Locked : ELockState::LockedOther;
+				State.LockUser = LockInfo.LockUser;
+			}
 		}
 	}
 
@@ -376,7 +398,10 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 						{
 							for (const auto& File : LockedFiles)
 							{
-								FGitLockedFilesCache::RemoveLockedFile(File);
+								if (States.Contains(File))
+								{
+									States[File].LockState = ELockState::NotLocked;
+								}
 							}
 						}
 					}
@@ -608,14 +633,44 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 		GitSourceControlUtils::GetLockedFiles(RequestedReverts, LockedFiles);
 		if (LockedFiles.Num() > 0)
 		{
+			// TODO: Can we actually run "unlock" on multiple files in one command?
+			// This seems like a bug
 			const TArray<FString>& RelativeFiles = GitSourceControlUtils::RelativeFilenames(LockedFiles, InCommand.PathToGitRoot);
 			InCommand.bCommandSuccessful &= GitSourceControlUtils::RunLFSCommand(TEXT("unlock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), RelativeFiles,
 																				 InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 			if (InCommand.bCommandSuccessful)
 			{
-				for (const auto& File : LockedFiles)
+				for (const FString& AboluteFile : LockedFiles)
 				{
-					FGitLockedFilesCache::RemoveLockedFile(File);
+					FGitState& State = States.FindOrAdd(AboluteFile);
+					State.LockState = ELockState::NotLocked;
+					State.LockUser = FString();
+				}
+			}
+			else
+			{
+				const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
+				// TODO: If we're checking out multiple files it's probably more optimal to run a broad git lfs locks here rather than per file
+				// but in the case of a single checkout, it's faster to run it for the specific file, which is the common case?
+				TArray<FString> Parameters{ "-p" };
+				for (const FString& RelativeFile : RelativeFiles)
+				{
+					const bool bLockCheckSucceeded = GitSourceControlUtils::RunLFSCommand(TEXT("locks"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, Parameters, { RelativeFile }, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+					if (bLockCheckSucceeded)
+					{
+						GitSourceControlUtils::FGitLfsLocksParser LockInfo(InCommand.PathToRepositoryRoot, *InCommand.ResultInfo.InfoMessages.rend());
+
+						FGitState& State = States.FindOrAdd(LockInfo.LocalFilename);
+						if (LockInfo.LockUser.IsEmpty())
+						{
+							State.LockState = ELockState::NotLocked;
+						}
+						else
+						{
+							State.LockState = LockInfo.LockUser == LockUser ? ELockState::Locked : ELockState::LockedOther;
+						}
+						State.LockUser = LockInfo.LockUser;
+					}
 				}
 			}
 		}

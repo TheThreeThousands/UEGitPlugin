@@ -186,6 +186,9 @@ void FGitSourceControlProvider::CheckRepositoryStatus()
 			TUniqueFunction<void()> SuccessFunc = [States, this]()
 			{
 				TMap<const FString, FGitState> Results;
+				TArray<FString> StatusErrorMessages;
+				GitSourceControlUtils::RefreshLocks(PathToRepositoryRoot, PathToGitBinary, StatusErrorMessages, Results);
+
 				if (GitSourceControlUtils::CollectNewStates(States, Results))
 				{
 					GitSourceControlUtils::UpdateCachedStates(Results);

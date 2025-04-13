@@ -261,7 +261,7 @@ bool FGitSourceControlState::CanCheckIn() const
 
 bool FGitSourceControlState::CanCheckout() const
 {
-	if (State.LockState == ELockState::Unlockable)
+	if (State.LockState == ELockState::NotLockable)
 	{
 		// Everything is already available for check in (checked out).
 		return false;
@@ -275,7 +275,7 @@ bool FGitSourceControlState::CanCheckout() const
 
 bool FGitSourceControlState::IsCheckedOut() const
 {
-	if (State.LockState == ELockState::Unlockable)
+	if (State.LockState == ELockState::NotLockable)
 	{
 		return IsSourceControlled(); // TODO: try modified instead? might block editing the file with a holding pattern
 	}
