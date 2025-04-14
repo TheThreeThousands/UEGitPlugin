@@ -1280,7 +1280,7 @@ static void ParseFileStatusResult(const FString& InPathToGitBinary, const FStrin
 		{
 			if (IsFileLFSLockable(File))
 			{
-				FileState.State.LockState = ELockState::Unknown;
+				FileState.State.LockState = ELockState::Unset;
 			}
 			else
 			{
@@ -1449,22 +1449,22 @@ void RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallb
 	static TMap<FString, FString> NewLocks;
 	static FCriticalSection ConcurrencyProtection;
 	FScopeLock Lock(&ConcurrencyProtection);
-
-	// You may ask, why are we ignoring state cache, and instead maintaining our own lock cache?
-	// The answer is that state cache updating is another operation, and those that update status
-	// (and thus the state cache) are using GetAllLocks. However, querying remote locks are almost always
-	// irrelevant in most of those update status cases. So, we need to provide a fast way to provide
-	// an updated local lock state. We could do this through the relevant lfs lock command arguments, which
-	// as you will see below, we use only for offline cases, but the exec cost of doing this isn't worth it
-	// when we can easily maintain this cache here. So, we are really emulating an internal Git LFS locks cache
-	// call, which gets fed into the state cache, rather than reimplementing the state cache :)
-
+	
 	TArray<FString> ErrorMessages;
 	TArray<FString> Results;
 	bool bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, FGitSourceControlModule::GetEmptyStringArray(), FGitSourceControlModule::GetEmptyStringArray(),
 							Results, OutErrorMessages);
 	if (bResult)
 	{
+		// Reset all lock states to be not locked, then override any which are locked to reflect that
+		for (auto& State : OutStates)
+		{
+			if (State.Value.LockState != ELockState::NotLockable)
+			{
+				State.Value.LockState = ELockState::NotLocked;
+			}
+		}
+
 		const FString& LfsUserName = FGitSourceControlModule::Get().GetProvider().GetLockUser();
 
 		for (const FString& Result : Results)
