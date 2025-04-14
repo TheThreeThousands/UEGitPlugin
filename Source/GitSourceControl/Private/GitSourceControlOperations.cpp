@@ -29,6 +29,11 @@
 
 #define LOCTEXT_NAMESPACE "GitSourceControl"
 
+bool FGitSourceControlWorker::UpdateStates() const
+{
+	return GitSourceControlUtils::UpdateCachedStates(States);
+}
+
 FName FGitConnectWorker::GetName() const
 {
 	return "Connect";
@@ -168,11 +173,6 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 	}
 
 	return InCommand.bCommandSuccessful;
-}
-
-bool FGitCheckOutWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
 }
 
 static FText ParseCommitResults(const TArray<FString>& InResults)
@@ -440,11 +440,6 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 	return false;
 }
 
-bool FGitCheckInWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
-}
-
 FName FGitMarkForAddWorker::GetName() const
 {
 	return "MarkForAdd";
@@ -478,11 +473,6 @@ bool FGitMarkForAddWorker::Execute(FGitSourceControlCommand& InCommand)
 	}
 
 	return InCommand.bCommandSuccessful;
-}
-
-bool FGitMarkForAddWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
 }
 
 FName FGitDeleteWorker::GetName() const
@@ -519,12 +509,6 @@ bool FGitDeleteWorker::Execute(FGitSourceControlCommand& InCommand)
 
 	return InCommand.bCommandSuccessful;
 }
-
-bool FGitDeleteWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
-}
-
 
 void GroupFileCommandsForRevert(const TArray<FString>& InFiles, TArray<FString>& FilesToRemove, TArray<FString>& FilesToCheckout, TArray<FString>& FilesToReset, TArray<FString>& FilesToDelete)
 {
@@ -688,11 +672,6 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 	return InCommand.bCommandSuccessful;
 }
 
-bool FGitRevertWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
-}
-
 FName FGitSyncWorker::GetName() const
 {
 	return "Sync";
@@ -731,11 +710,6 @@ bool FGitSyncWorker::Execute(FGitSourceControlCommand& InCommand)
 
 	return InCommand.bCommandSuccessful;
 	*/
-}
-
-bool FGitSyncWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
 }
 
 FName FGitFetch::GetName() const
@@ -781,11 +755,6 @@ bool FGitFetchWorker::Execute(FGitSourceControlCommand& InCommand)
 	}
 
 	return InCommand.bCommandSuccessful;
-}
-
-bool FGitFetchWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
 }
 
 FName FGitUpdateStatusWorker::GetName() const
@@ -905,11 +874,6 @@ bool FGitCopyWorker::Execute(FGitSourceControlCommand& InCommand)
 	return InCommand.bCommandSuccessful;
 }
 
-bool FGitCopyWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
-}
-
 FName FGitResolveWorker::GetName() const
 {
 	return "Resolve";
@@ -933,11 +897,6 @@ bool FGitResolveWorker::Execute( class FGitSourceControlCommand& InCommand )
 	}
 
 	return InCommand.bCommandSuccessful;
-}
-
-bool FGitResolveWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
 }
 
 #if ENGINE_MAJOR_VERSION == 5
