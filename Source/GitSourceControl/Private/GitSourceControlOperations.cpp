@@ -179,6 +179,9 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 			const bool bLockCheckSucceeded = GitSourceControlUtils::RunLFSCommand(TEXT("locks"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, Parameters, { RelativeFile }, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 			if (bLockCheckSucceeded)
 			{
+				// The result of this call should contain only 1 entry, telling us who holds the lock, since we only asked for the lock owner of 1 file.
+				// project/path/to/file/filename    Jane Doe    id:####
+				check(InCommand.ResultInfo.InfoMessages.Num() == 1);
 				GitSourceControlUtils::FGitLfsLocksParser LockInfo(InCommand.PathToRepositoryRoot, InCommand.ResultInfo.InfoMessages.Last());
 
 				FGitState& State = States.FindOrAdd(LockInfo.LocalFilename);
