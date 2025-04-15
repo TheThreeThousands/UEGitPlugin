@@ -25,8 +25,6 @@ public:
 	bool bUpdateStatus = false;
 };
 
-// Base class for any mutating operations which affect file locks, handles graceful status reconciliation  for both git state and lfs lock updates
-// inherited types are responsible for populating LockStates with a list of changes to lock state which they either performed, or detected.
 class FGitSourceControlWorker : public IGitSourceControlWorker
 {
 public:

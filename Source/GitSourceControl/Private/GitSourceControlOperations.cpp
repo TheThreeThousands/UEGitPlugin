@@ -34,6 +34,22 @@ bool FGitSourceControlWorker::UpdateStates() const
 	return GitSourceControlUtils::UpdateCachedStates(States);
 }
 
+
+void ReconcileWorkerStateWithStatusUpdate(const TMap<FString, FGitSourceControlState>& UpdatedStates, TMap<const FString, FGitState>& States)
+{
+	// Keep our known lock state updates.
+	TMap<const FString, FGitState> LockStateCopy = States;
+
+	GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
+
+	// Set the lock states back, UpdateStatus doesn't know about locks, so it will have written locks back to "Unset".
+	for (const auto& State : LockStateCopy)
+	{
+		States[State.Key].LockState = State.Value.LockState;
+		States[State.Key].LockUser = State.Value.LockUser;
+	}
+}
+
 FName FGitConnectWorker::GetName() const
 {
 	return "Connect";
@@ -429,7 +445,7 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 															   FilesToCheckIn.Array(), InCommand.ResultInfo.ErrorMessages, UpdatedStates);
 		if (bSuccess)
 		{
-			GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
+			ReconcileWorkerStateWithStatusUpdate(UpdatedStates, States);
 		}
 		GitSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 		return InCommand.bCommandSuccessful;
@@ -467,7 +483,7 @@ bool FGitMarkForAddWorker::Execute(FGitSourceControlCommand& InCommand)
 		bool bSuccess = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking, InCommand.Files, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
 		if (bSuccess)
 		{
-			GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
+			ReconcileWorkerStateWithStatusUpdate(UpdatedStates, States);
 		}
 		GitSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 	}
@@ -502,7 +518,7 @@ bool FGitDeleteWorker::Execute(FGitSourceControlCommand& InCommand)
 		bool bSuccess = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking, InCommand.Files, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
 		if (bSuccess)
 		{
-			GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
+			ReconcileWorkerStateWithStatusUpdate(UpdatedStates, States);
 		}
 		GitSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 	}
@@ -665,7 +681,7 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 	bool bSuccess = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking, RequestedReverts, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
 	if (bSuccess)
 	{
-		GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
+		ReconcileWorkerStateWithStatusUpdate(UpdatedStates, States);
 	}
 	GitSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 
@@ -750,7 +766,7 @@ bool FGitFetchWorker::Execute(FGitSourceControlCommand& InCommand)
 		GitSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 		if (InCommand.bCommandSuccessful)
 		{
-			GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
+			ReconcileWorkerStateWithStatusUpdate(UpdatedStates, States);
 		}
 	}
 
