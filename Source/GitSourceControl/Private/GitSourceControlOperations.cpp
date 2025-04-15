@@ -179,7 +179,7 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 			const bool bLockCheckSucceeded = GitSourceControlUtils::RunLFSCommand(TEXT("locks"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, Parameters, { RelativeFile }, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 			if (bLockCheckSucceeded)
 			{
-				GitSourceControlUtils::FGitLfsLocksParser LockInfo(InCommand.PathToRepositoryRoot, *InCommand.ResultInfo.InfoMessages.rend());
+				GitSourceControlUtils::FGitLfsLocksParser LockInfo(InCommand.PathToRepositoryRoot, InCommand.ResultInfo.InfoMessages.Last());
 
 				FGitState& State = States.FindOrAdd(LockInfo.LocalFilename);
 				State.LockState = LockInfo.LockUser == LockUser ? ELockState::Locked : ELockState::LockedOther;
