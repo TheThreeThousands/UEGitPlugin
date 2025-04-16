@@ -63,7 +63,6 @@ void FGitSourceControlModule::StartupModule()
 	GitSourceControlProvider.RegisterWorker( "MoveToChangelist", FGetGitSourceControlWorker::CreateStatic( &CreateWorker<FGitMoveToChangelistWorker> ) );
 	GitSourceControlProvider.RegisterWorker( "UpdateChangelistsStatus", FGetGitSourceControlWorker::CreateStatic( &CreateWorker<FGitUpdateStagingWorker> ) );
 #endif
-	GitSourceControlProvider.RegisterWorker( "RefreshLocks", FGetGitSourceControlWorker::CreateStatic( &CreateWorker<FGitRefreshLockStateWorker> ) );
 
 	// load our settings
 	GitSourceControlSettings.LoadSettings();
