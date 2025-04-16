@@ -764,6 +764,7 @@ bool FGitFetchWorker::Execute(FGitSourceControlCommand& InCommand)
 		// Now update the status of all our files
 		const TArray<FString> ProjectDirs { FString(FPlatformProcess::BaseDir()) };
 		TMap<FString, FGitSourceControlState> UpdatedStates;
+		GitSourceControlUtils::RefreshLocks(InCommand.PathToRepositoryRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
 		InCommand.bCommandSuccessful = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking,
 																			  ProjectDirs, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
 		GitSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
