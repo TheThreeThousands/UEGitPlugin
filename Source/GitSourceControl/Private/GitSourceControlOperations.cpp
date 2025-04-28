@@ -941,64 +941,6 @@ bool FGitResolveWorker::Execute( class FGitSourceControlCommand& InCommand )
 	return InCommand.bCommandSuccessful;
 }
 
-#if ENGINE_MAJOR_VERSION == 5
-FName FGitMoveToChangelistWorker::GetName() const
-{
-	return "MoveToChangelist";
-}
-
-bool FGitMoveToChangelistWorker::UpdateStates() const
-{
-	return true;
-}
-
-bool FGitMoveToChangelistWorker::Execute(FGitSourceControlCommand& InCommand)
-{
-	TRACE_CPUPROFILER_EVENT_SCOPE(FGitMoveToChangelistWorker::Execute);
-
-	check(InCommand.Operation->GetName() == GetName());
-
-	FGitSourceControlChangelist DestChangelist = InCommand.Changelist;
-	bool bResult = false;
-	if(DestChangelist.GetName().Equals(TEXT("Staged")))
-	{
-		bResult = GitSourceControlUtils::RunCommand(TEXT("add"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, FGitSourceControlModule::GetEmptyStringArray(), InCommand.Files, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-	}
-	else if(DestChangelist.GetName().Equals(TEXT("Working")))
-	{
-		TArray<FString> Parameter;
-		Parameter.Add(TEXT("--staged"));
-		bResult = GitSourceControlUtils::RunCommand(TEXT("restore"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, Parameter, InCommand.Files, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-	}
-	
-	if (bResult)
-	{
-		TMap<FString, FGitSourceControlState> DummyStates;
-		GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking, InCommand.Files, InCommand.ResultInfo.InfoMessages, DummyStates);
-	}
-	return bResult;
-}
-
-FName FGitUpdateStagingWorker::GetName() const
-{
-	return "UpdateChangelistsStatus";
-}
-
-bool FGitUpdateStagingWorker::Execute(FGitSourceControlCommand& InCommand)
-{
-	TRACE_CPUPROFILER_EVENT_SCOPE(FGitUpdateStagingWorker::Execute);
-
-	return GitSourceControlUtils::UpdateChangelistStateByCommand();
-}
-
-bool FGitUpdateStagingWorker::UpdateStates() const
-{
-	return true;
-}
-#endif
-
-#undef LOCTEXT_NAMESPACE
-
 FName FGitLFSRefreshLocks::GetName() const
 {
 	return "Refresh Locks";
@@ -1057,3 +999,61 @@ bool FGitRefreshLockStateWorker::Execute(class FGitSourceControlCommand& InComma
 	}
 	return InCommand.bCommandSuccessful;
 }
+
+#if ENGINE_MAJOR_VERSION == 5
+FName FGitMoveToChangelistWorker::GetName() const
+{
+	return "MoveToChangelist";
+}
+
+bool FGitMoveToChangelistWorker::UpdateStates() const
+{
+	return true;
+}
+
+bool FGitMoveToChangelistWorker::Execute(FGitSourceControlCommand& InCommand)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitMoveToChangelistWorker::Execute);
+
+	check(InCommand.Operation->GetName() == GetName());
+
+	FGitSourceControlChangelist DestChangelist = InCommand.Changelist;
+	bool bResult = false;
+	if(DestChangelist.GetName().Equals(TEXT("Staged")))
+	{
+		bResult = GitSourceControlUtils::RunCommand(TEXT("add"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, FGitSourceControlModule::GetEmptyStringArray(), InCommand.Files, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+	}
+	else if(DestChangelist.GetName().Equals(TEXT("Working")))
+	{
+		TArray<FString> Parameter;
+		Parameter.Add(TEXT("--staged"));
+		bResult = GitSourceControlUtils::RunCommand(TEXT("restore"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, Parameter, InCommand.Files, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+	}
+	
+	if (bResult)
+	{
+		TMap<FString, FGitSourceControlState> DummyStates;
+		GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking, InCommand.Files, InCommand.ResultInfo.InfoMessages, DummyStates);
+	}
+	return bResult;
+}
+
+FName FGitUpdateStagingWorker::GetName() const
+{
+	return "UpdateChangelistsStatus";
+}
+
+bool FGitUpdateStagingWorker::Execute(FGitSourceControlCommand& InCommand)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitUpdateStagingWorker::Execute);
+
+	return GitSourceControlUtils::UpdateChangelistStateByCommand();
+}
+
+bool FGitUpdateStagingWorker::UpdateStates() const
+{
+	return true;
+}
+#endif
+
+#undef LOCTEXT_NAMESPACE
