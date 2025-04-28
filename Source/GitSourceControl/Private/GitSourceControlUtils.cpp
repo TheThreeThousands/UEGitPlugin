@@ -1387,7 +1387,11 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 		// .. means commits in the right that are not in the left
 		ParametersLog[2] = FString::Printf(TEXT("..%s"), *Branch);
 
-		const bool bResultLog = RunCommand(TEXT("log"), InPathToGitBinary, InRepositoryRoot, ParametersLog, FilesToDiff, LogResults, ErrorMessages);
+		bool bResultLog = false;
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*FString::Printf(TEXT("GitSourceControlUtils::CheckRemote Log %s"), *Branch));
+			bResultLog = RunCommand(TEXT("log"), InPathToGitBinary, InRepositoryRoot, ParametersLog, FilesToDiff, LogResults, ErrorMessages);
+		}
 		if (bResultLog)
 		{
 			// Status Branches may not be initialized because they're not in use by the project. They can also be not initilaized in some other quirky circumstances
@@ -1397,10 +1401,18 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 			{
 				// Check if the files state in the branch in which is changed is actually different from status branch
 				// This opens files for edit if they were modified in another branch but have since been reverted back to state in status.
-				TArray<FString> DiffParametersLog{ TEXT("--pretty="), TEXT("--name-only"), FString::Printf(TEXT("%s..%s"), *StatusBranches[0], *Branch), TEXT(""), TEXT("--") };
-				const bool bResultDiff = RunCommand(TEXT("diff"), InPathToGitBinary, InRepositoryRoot, DiffParametersLog, FilesToDiff, DiffResults, ErrorMessages);
-				// Get the intersection of the 2 containers
-				Intersection = DiffResults.FilterByPredicate([&LogResults](const FString& ChangedFile) { return LogResults.Contains(ChangedFile); });
+				{
+					TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*FString::Printf(TEXT("GitSourceControlUtils::CheckRemote diff %s"), *Branch));
+					TArray<FString> DiffParametersLog{ TEXT("--pretty="), TEXT("--name-only"), FString::Printf(TEXT("%s..%s"), *StatusBranches[0], *Branch), TEXT(""), TEXT("--") };
+					RunCommand(TEXT("diff"), InPathToGitBinary, InRepositoryRoot, DiffParametersLog, FilesToDiff, DiffResults, ErrorMessages);
+				}
+				
+				{
+					TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*FString::Printf(TEXT("GitSourceControlUtils::CheckRemote Find Intersection %s"), *Branch));
+					// Get the intersection of the 2 containers
+					Intersection = DiffResults.FilterByPredicate([&LogResults](const FString& ChangedFile) { return LogResults.Contains(ChangedFile); });
+				}
+
 			}
 			else
 			{
@@ -1446,6 +1458,8 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 
 bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, TMap<const FString, FGitState>& OutStates)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(GitSourceControlUtils::RefreshLocks);
+
 	// Refresh could be called from multiple threads concurrently
 	// The NewLocks static here gets swapped with our locks cache, this is a static and not a member to avoid unnecessary allocations
 	// in large projects utilizing OFPA, the locks list could be potentially thousands of pairs of strings that get allocated and de-allocated every time we call this function
