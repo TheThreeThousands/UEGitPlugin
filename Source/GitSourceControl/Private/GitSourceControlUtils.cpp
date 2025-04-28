@@ -1324,6 +1324,7 @@ void ParseStatusResults(const FString& InPathToGitBinary, const FString& InRepos
 void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& Files,
 				 TArray<FString>& OutErrorMessages, TMap<FString, FGitSourceControlState>& OutStates)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(GitSourceControlUtils::CheckRemote);
 	// We can obtain a list of files that were modified between our remote branches and HEAD. Assumes that fetch has been run to get accurate info.
 
 	// Gather valid remote branches
@@ -1371,6 +1372,8 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	TArray<FString> ParametersLog{TEXT("--pretty="), TEXT("--name-only"), TEXT(""), TEXT("--")};
 	for (auto& Branch : BranchesToDiff)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*FString::Printf(TEXT("GitSourceControlUtils::CheckRemote %s"), *Branch));
+
 		bool bCurrentBranch;
 		if (bDiffAgainstRemoteCurrent && Branch.Equals(CurrentBranchName))
 		{
@@ -1565,6 +1568,8 @@ bool UpdateChangelistStateByCommand()
 bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const bool InUsingLfsLocking, const TArray<FString>& InFiles,
 					 TArray<FString>& OutErrorMessages, TMap<FString, FGitSourceControlState>& OutStates)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(GitSourceControlUtils::RunUpdateStatus);
+
 	// Remove files that aren't in the repository
 	const TArray<FString>& RepoFiles = InFiles.FilterByPredicate([InRepositoryRoot](const FString& File) { return File.StartsWith(InRepositoryRoot); });
 

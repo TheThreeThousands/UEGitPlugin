@@ -57,6 +57,8 @@ FName FGitConnectWorker::GetName() const
 
 bool FGitConnectWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitConnectWorker::Execute);
+
 	// The connect worker checks if we are connected to the remote server.
 	check(InCommand.Operation->GetName() == GetName());
 	TSharedRef<FConnect, ESPMode::ThreadSafe> Operation = StaticCastSharedRef<FConnect>(InCommand.Operation);
@@ -121,6 +123,8 @@ FName FGitCheckOutWorker::GetName() const
 
 bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitCheckOutWorker::Execute);
+
 	// If we have nothing to process, exit immediately
 	if (InCommand.Files.Num() == 0)
 	{
@@ -213,6 +217,8 @@ const FText EmptyCommitMsg;
 
 bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitCheckInWorker::Execute);
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	TSharedRef<FCheckIn, ESPMode::ThreadSafe> Operation = StaticCastSharedRef<FCheckIn>(InCommand.Operation);
@@ -466,6 +472,8 @@ FName FGitMarkForAddWorker::GetName() const
 
 bool FGitMarkForAddWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitMarkForAddWorker::Execute);
+
 	// If we have nothing to process, exit immediately
 	if (InCommand.Files.Num() == 0)
 	{
@@ -501,6 +509,8 @@ FName FGitDeleteWorker::GetName() const
 
 bool FGitDeleteWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitDeleteWorker::Execute);
+
 	// If we have nothing to process, exit immediately
 	if (InCommand.Files.Num() == 0)
 	{
@@ -575,6 +585,8 @@ FName FGitRevertWorker::GetName() const
 
 bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitRevertWorker::Execute);
+
 	InCommand.bCommandSuccessful = true;
 
 	// Filter files by status
@@ -698,6 +710,8 @@ FName FGitSyncWorker::GetName() const
 
 bool FGitSyncWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitSyncWorker::Execute);
+
 	FText SyncNotAllowedMessage(LOCTEXT("GitSync_NotAllowed_Msg", "Please exit Unreal Engine and update through GitHub Desktop to get latest changes."));
 	FText SyncNotAllowedTitle(LOCTEXT("GitSync_NotAllowed_Title", "Synching is not allowed"));
 	FMessageDialog::Open(EAppMsgType::Ok, SyncNotAllowedMessage, SyncNotAllowedTitle);
@@ -749,6 +763,8 @@ FName FGitFetchWorker::GetName() const
 
 bool FGitFetchWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitFetchWorker::Execute);
+
 	InCommand.bCommandSuccessful = GitSourceControlUtils::FetchRemote(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking,
 																	  InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 	if (!InCommand.bCommandSuccessful)
@@ -784,6 +800,8 @@ FName FGitUpdateStatusWorker::GetName() const
 
 bool FGitUpdateStatusWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitUpdateStatusWorker::Execute);
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	TSharedRef<FUpdateStatus, ESPMode::ThreadSafe> Operation = StaticCastSharedRef<FUpdateStatus>(InCommand.Operation);
@@ -868,6 +886,8 @@ FName FGitCopyWorker::GetName() const
 
 bool FGitCopyWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitCopyWorker::Execute);
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	// Copy or Move operation on a single file : Git does not need an explicit copy nor move,
@@ -901,6 +921,8 @@ FName FGitResolveWorker::GetName() const
 
 bool FGitResolveWorker::Execute( class FGitSourceControlCommand& InCommand )
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitResolveWorker::Execute);
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	// mark the conflicting files as resolved:
@@ -932,6 +954,8 @@ bool FGitMoveToChangelistWorker::UpdateStates() const
 
 bool FGitMoveToChangelistWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitMoveToChangelistWorker::Execute);
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	FGitSourceControlChangelist DestChangelist = InCommand.Changelist;
@@ -962,6 +986,8 @@ FName FGitUpdateStagingWorker::GetName() const
 
 bool FGitUpdateStagingWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitUpdateStagingWorker::Execute);
+
 	return GitSourceControlUtils::UpdateChangelistStateByCommand();
 }
 
