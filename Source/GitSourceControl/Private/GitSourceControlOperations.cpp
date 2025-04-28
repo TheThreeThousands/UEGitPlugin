@@ -175,24 +175,7 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 	}
 	else
 	{
-		// TODO: If we're checking out multiple files it's probably more optimal to run a broad git lfs locks here rather than per file
-		// but in the case of a single checkout, it's faster to run it for the specific file, which is the common case?
-		TArray<FString> Parameters { "-p" };
-		for (const FString& RelativeFile : LockableRelativeFiles)
-		{
-			const bool bLockCheckSucceeded = GitSourceControlUtils::RunLFSCommand(TEXT("locks"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, Parameters, { RelativeFile }, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-			if (bLockCheckSucceeded)
-			{
-				// The result of this call should contain only 1 entry, telling us who holds the lock, since we only asked for the lock owner of 1 file.
-				// project/path/to/file/filename    Jane Doe    id:####
-				check(InCommand.ResultInfo.InfoMessages.Num() == 1);
-				GitSourceControlUtils::FGitLfsLocksParser LockInfo(InCommand.PathToRepositoryRoot, InCommand.ResultInfo.InfoMessages.Last());
-
-				FGitState& State = States.FindOrAdd(LockInfo.LocalFilename);
-				State.LockState = LockInfo.LockUser == LockUser ? ELockState::Locked : ELockState::LockedOther;
-				State.LockUser = LockInfo.LockUser;
-			}
-		}
+		FGitSourceControlModule::Get().GetProvider().Execute(ISourceControlOperation::Create<FGitLFSRefreshLocks>(), InCommand.Files);
 	}
 
 	return InCommand.bCommandSuccessful;
@@ -664,29 +647,7 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 			}
 			else
 			{
-				const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
-				// TODO: If we're checking out multiple files it's probably more optimal to run a broad git lfs locks here rather than per file
-				// but in the case of a single checkout, it's faster to run it for the specific file, which is the common case?
-				TArray<FString> Parameters{ "-p" };
-				for (const FString& RelativeFile : RelativeFiles)
-				{
-					const bool bLockCheckSucceeded = GitSourceControlUtils::RunLFSCommand(TEXT("locks"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, Parameters, { RelativeFile }, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-					if (bLockCheckSucceeded)
-					{
-						GitSourceControlUtils::FGitLfsLocksParser LockInfo(InCommand.PathToRepositoryRoot, *InCommand.ResultInfo.InfoMessages.rend());
-
-						FGitState& State = States.FindOrAdd(LockInfo.LocalFilename);
-						if (LockInfo.LockUser.IsEmpty())
-						{
-							State.LockState = ELockState::NotLocked;
-						}
-						else
-						{
-							State.LockState = LockInfo.LockUser == LockUser ? ELockState::Locked : ELockState::LockedOther;
-						}
-						State.LockUser = LockInfo.LockUser;
-					}
-				}
+				FGitSourceControlModule::Get().GetProvider().Execute(ISourceControlOperation::Create<FGitLFSRefreshLocks>(), InCommand.Files);
 			}
 		}
 	}
