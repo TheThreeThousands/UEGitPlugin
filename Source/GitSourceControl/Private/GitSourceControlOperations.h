@@ -25,6 +25,14 @@ public:
 	bool bUpdateStatus = false;
 };
 
+class FGitLFSRefreshLocks : public ISourceControlOperation
+{
+	// ISourceControlOperation interface
+	virtual FName GetName() const override;
+
+	virtual FText GetInProgressString() const override;
+};
+
 class FGitSourceControlWorker : public IGitSourceControlWorker
 {
 public:
@@ -181,5 +189,14 @@ public:
 	
 	/** Temporary states for results */
 	TMap<const FString, FGitState> States;
+};
+
+class FGitRefreshLockStateWorker : public FGitSourceControlWorker
+{
+public:
+	virtual ~FGitRefreshLockStateWorker() {}
+	// IGitSourceControlWorker interface
+	virtual FName GetName() const override;
+	virtual bool Execute(class FGitSourceControlCommand& InCommand) override;
 };
 #endif

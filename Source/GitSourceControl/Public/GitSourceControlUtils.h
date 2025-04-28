@@ -363,7 +363,7 @@ bool CollectNewStates(const TArray<FString>& InFiles, TMap<const FString, FGitSt
 	* @param   GitBinaryFallBack   The Git binary fallback path
 	* @param	OutErrorMessages    Any errors (from StdErr) as an array per-line
 */
-void RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallBack, TArray<FString>& OutErrorMessages, TMap<const FString, FGitState>& OutStates);
+bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallBack, TArray<FString>& OutErrorMessages, TMap<const FString, FGitState>& OutStates);
 
 /**
  * Gets locks from state cache

@@ -1444,7 +1444,7 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	OutErrorMessages.Append(ErrorMessages);
 }
 
-void RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, TMap<const FString, FGitState>& OutStates)
+bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, TMap<const FString, FGitState>& OutStates)
 {
 	// Refresh could be called from multiple threads concurrently
 	// The NewLocks static here gets swapped with our locks cache, this is a static and not a member to avoid unnecessary allocations
@@ -1482,6 +1482,8 @@ void RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallb
 			State.LockUser = LockFile.LockUser;
 		}
 	}
+
+	return bResult;
 }
 
 void GetLockedFiles(const TArray<FString>& InFiles, TArray<FString>& OutFiles)
