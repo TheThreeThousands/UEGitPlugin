@@ -406,10 +406,8 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 						{
 							for (const auto& File : LockedFiles)
 							{
-								if (States.Contains(File))
-								{
-									States[File].LockState = ELockState::NotLocked;
-								}
+								FGitState& State = States.FindOrAdd(File);
+								State.LockState = ELockState::NotLocked;
 							}
 						}
 					}
