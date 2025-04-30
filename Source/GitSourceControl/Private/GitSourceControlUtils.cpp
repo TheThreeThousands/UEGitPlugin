@@ -1476,6 +1476,14 @@ bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallb
 	TArray<FString> Results;
 	bool bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, FGitSourceControlModule::GetEmptyStringArray(), FGitSourceControlModule::GetEmptyStringArray(),
 							Results, OutErrorMessages);
+
+	// If we can't connect to server, fall back to our cached lock state - there's no guarantee that the state hasn't changed on the server, but it's better than not showing locks at all.
+	if (!bResult)
+	{
+		bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, { TEXT("--cached") }, FGitSourceControlModule::GetEmptyStringArray(),
+			Results, OutErrorMessages);
+	}
+
 	if (bResult)
 	{
 		// Reset all lock states to be not locked, then override any which are locked to reflect that
