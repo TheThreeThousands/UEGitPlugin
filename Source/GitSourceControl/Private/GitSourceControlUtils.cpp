@@ -1473,7 +1473,6 @@ bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallb
 	static FCriticalSection ConcurrencyProtection;
 	FScopeLock Lock(&ConcurrencyProtection);
 	
-	TArray<FString> ErrorMessages;
 	TArray<FString> Results;
 	bool bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, FGitSourceControlModule::GetEmptyStringArray(), FGitSourceControlModule::GetEmptyStringArray(),
 							Results, OutErrorMessages);
