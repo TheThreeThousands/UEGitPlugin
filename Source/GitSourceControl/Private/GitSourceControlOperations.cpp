@@ -169,6 +169,8 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 		for (const FString& AboluteFile : AbsoluteFiles)
 		{
 			FGitState& State = States.FindOrAdd(AboluteFile);
+			State.TreeState = ETreeState::Unset;
+			State.RemoteState = ERemoteState::Unset;
 			State.LockState = ELockState::Locked;
 			State.LockUser = LockUser;
 		}
@@ -407,7 +409,10 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 							for (const auto& File : LockedFiles)
 							{
 								FGitState& State = States.FindOrAdd(File);
+								State.TreeState = ETreeState::Unmodified;
+								State.RemoteState = ERemoteState::Unset;
 								State.LockState = ELockState::NotLocked;
+								State.LockUser = "";
 							}
 						}
 					}
@@ -639,8 +644,10 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 				for (const FString& AboluteFile : LockedFiles)
 				{
 					FGitState& State = States.FindOrAdd(AboluteFile);
+					State.TreeState = ETreeState::Unmodified;
+					State.RemoteState = ERemoteState::Unset;
 					State.LockState = ELockState::NotLocked;
-					State.LockUser = FString();
+					State.LockUser = "";
 				}
 			}
 			else
@@ -937,6 +944,8 @@ bool FGitRefreshLockStateWorker::Execute(class FGitSourceControlCommand& InComma
 			if (bLockCheckSucceeded)
 			{
 				FGitState& State = States.FindOrAdd(FilePath);
+				State.TreeState = ETreeState::Unset;
+				State.RemoteState = ERemoteState::Unset;
 				State.LockState = ELockState::NotLocked;
 				State.LockUser = "";
 
