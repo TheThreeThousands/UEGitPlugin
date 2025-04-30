@@ -1369,7 +1369,20 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	// This shows any new files as well.
 	// Also update the status of `.checksum`.
 	TArray<FString> FilesToDiff{FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()), ".checksum", "Binaries/", "Plugins/"};
-	TArray<FString> ParametersLog{TEXT("--pretty="), TEXT("--name-only"), TEXT(""), TEXT("--")};
+	TArray<FString> ParametersLog{TEXT("--pretty="), TEXT("--name-only") };
+	for (auto& Branch : BranchesToDiff)
+	{
+		ParametersLog.Add(FString::Printf(TEXT("%s"), *Branch));
+	}
+	ParametersLog.Add(TEXT("HEAD.."));
+	ParametersLog.Add(TEXT("--"));
+
+	bool bResultLog = false;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE_TEXT("GitSourceControlUtils::CheckRemote Log %s");
+		bResultLog = RunCommand(TEXT("log"), InPathToGitBinary, InRepositoryRoot, ParametersLog, FilesToDiff, LogResults, ErrorMessages);
+	}	
+
 	for (auto& Branch : BranchesToDiff)
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*FString::Printf(TEXT("GitSourceControlUtils::CheckRemote %s"), *Branch));
@@ -1383,15 +1396,7 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 		{
 			bCurrentBranch = false;
 		}
-		// empty defaults to HEAD
-		// .. means commits in the right that are not in the left
-		ParametersLog[2] = FString::Printf(TEXT("..%s"), *Branch);
 
-		bool bResultLog = false;
-		{
-			TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*FString::Printf(TEXT("GitSourceControlUtils::CheckRemote Log %s"), *Branch));
-			bResultLog = RunCommand(TEXT("log"), InPathToGitBinary, InRepositoryRoot, ParametersLog, FilesToDiff, LogResults, ErrorMessages);
-		}
 		if (bResultLog)
 		{
 			// Status Branches may not be initialized because they're not in use by the project. They can also be not initilaized in some other quirky circumstances
@@ -1439,7 +1444,6 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 				}
 			}
 		}
-		LogResults.Reset();
 		DiffResults.Reset();
 		Intersection.Reset();
 	}

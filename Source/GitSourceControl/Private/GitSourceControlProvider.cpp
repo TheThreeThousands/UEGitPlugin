@@ -34,6 +34,7 @@
 #include "UObject/ObjectSaveContext.h"
 #endif
 
+#include "Algo/RemoveIf.h"
 #include "UObject/Package.h"
 
 #define LOCTEXT_NAMESPACE "GitSourceControl"
@@ -924,15 +925,12 @@ TArray<FString> FGitSourceControlProvider::GetStatusBranchNames() const
 	{
 		TArray<FString> Matches;
 		bool bResult = GitSourceControlUtils::GetRemoteBranchesWildcard(PathToGitBinary, PathToRepositoryRoot, StatusBranchNamePatternsInternal[i], Matches);
-		if (bResult && Matches.Num() > 0)
-		{
-			for (int j = 0; j < Matches.Num(); j++)
-			{
-				StatusBranches.Add(Matches[j].TrimStartAndEnd());	
-			}
-		}
+		Algo::Transform(Matches, StatusBranches, [](const FString& Branch) { return Branch.TrimStartAndEnd(); });
 	}
 	
+	// Git branch --remotes will return a branch in the format "origin/HEAD -> origin/main" in the list of branches...
+	StatusBranches.SetNum(Algo::RemoveIf(StatusBranches, [](const FString& Branch) { return Branch.StartsWith("origin/HEAD"); }));
+
 	return StatusBranches;
 }
 
