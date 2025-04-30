@@ -2271,6 +2271,7 @@ bool CheckLFSLockable(const FString& InPathToGitBinary, const FString& InReposit
 bool FetchRemote(const FString& InPathToGitBinary, const FString& InPathToRepositoryRoot, bool InUsingGitLfsLocking, TArray<FString>& OutResults, TArray<FString>& OutErrorMessages)
 {
 	TArray<FString> Params{"--no-tags"};
+	Params.Add(TEXT("--prune"));
 	return RunCommand(TEXT("fetch"), InPathToGitBinary, InPathToRepositoryRoot, Params,
 					  FGitSourceControlModule::GetEmptyStringArray(), OutResults, OutErrorMessages);
 }
