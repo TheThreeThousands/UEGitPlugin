@@ -1607,19 +1607,6 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
 		return false;
 	}
 
-	// If the only files being touched are ones which we have checked out already, don't bother updating the status, we don't care, because the status can't have changed underneath us
-	// Unless somebody used a force push, but that edge case isn't worth the increased cost of running these status updates.
-	FGitSourceControlProvider& provider = FGitSourceControlModule::Get().GetProvider();
-	TArray<TSharedRef<ISourceControlState, ESPMode::ThreadSafe>> States;
-	provider.GetState(InFiles, States, EStateCacheUsage::Use);
-
-	int numCheckedOutFiles = Algo::CountIf(States, [&provider](const TSharedRef<ISourceControlState>& SourceControlState) { return SourceControlState->IsCheckedOut() || SourceControlState->IsAdded(); });
-	if (numCheckedOutFiles == RepoFiles.Num())
-	{
-		return true;
-	}
-
-
 	TArray<FString> Parameters;
 	Parameters.Add(TEXT("--porcelain"));
 	Parameters.Add(TEXT("-uall")); // make sure we use -uall to list all files instead of directories
@@ -1643,7 +1630,19 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
 	UpdateChangelistStateByCommand();
 #endif
 
-	CheckRemote(InPathToGitBinary, InRepositoryRoot, RepoFiles, OutErrorMessages, OutStates);
+	// If the only files being touched are ones which we have checked out already, don't bother updating the remote status, we don't care, because the status can't have changed underneath us
+	// Unless somebody used a force push, but that edge case isn't worth the increased cost of running these status updates.
+	// NB:	It is important to still update the local status, as saving files doesn't mark them as modified in source control
+	//		The engine relies on this status update to update the file to reflect that it is modified
+	FGitSourceControlProvider& provider = FGitSourceControlModule::Get().GetProvider();
+	TArray<TSharedRef<ISourceControlState, ESPMode::ThreadSafe>> States;
+	provider.GetState(InFiles, States, EStateCacheUsage::Use);
+
+	int numCheckedOutFiles = Algo::CountIf(States, [&provider](const TSharedRef<ISourceControlState>& SourceControlState) { return SourceControlState->IsCheckedOut() || SourceControlState->IsAdded(); });
+	if (numCheckedOutFiles != RepoFiles.Num())
+	{
+		CheckRemote(InPathToGitBinary, InRepositoryRoot, RepoFiles, OutErrorMessages, OutStates);
+	}
 
 	return bResult;
 }
