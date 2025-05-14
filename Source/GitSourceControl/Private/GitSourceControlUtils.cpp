@@ -1406,11 +1406,11 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 			// which means editor plugins are enabled and running, but they don't run UnrealEdEngine, so the status branches are not initialized.
 			if (StatusBranches.Num() > 0)
 			{
-				// Check if the files state in the branch in which is changed is actually different from status branch
+				// Check if the files state in the branch in which is changed is actually different from compared branch
 				// This opens files for edit if they were modified in another branch but have since been reverted back to state in status.
 				{
 					TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*FString::Printf(TEXT("GitSourceControlUtils::CheckRemote diff %s"), *Branch));
-					TArray<FString> DiffParametersLog{ TEXT("--pretty="), TEXT("--name-only"), FString::Printf(TEXT("%s..%s"), *StatusBranches[0], *Branch), TEXT(""), TEXT("--") };
+					TArray<FString> DiffParametersLog{ TEXT("--pretty="), TEXT("--name-only"), FString::Printf(TEXT("...%s"), *Branch), TEXT(""), TEXT("--") };
 					RunCommand(TEXT("diff"), InPathToGitBinary, InRepositoryRoot, DiffParametersLog, FilesToDiff, DiffResults, ErrorMessages);
 				}
 				
