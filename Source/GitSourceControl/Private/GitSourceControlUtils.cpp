@@ -1419,7 +1419,6 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 					// Get the intersection of the 2 containers
 					Intersection = DiffResults.FilterByPredicate([&LogResults](const FString& ChangedFile) { return LogResults.Contains(ChangedFile); });
 				}
-
 			}
 			else
 			{
