@@ -1465,6 +1465,12 @@ bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallb
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(GitSourceControlUtils::RefreshLocks);
 
+	const FGitSourceControlModule* GitSourceControlModule = FGitSourceControlModule::GetThreadSafe();
+	if (GitSourceControlModule == nullptr)
+	{
+		return false;
+	}
+
 	// Refresh could be called from multiple threads concurrently
 	// The NewLocks static here gets swapped with our locks cache, this is a static and not a member to avoid unnecessary allocations
 	// in large projects utilizing OFPA, the locks list could be potentially thousands of pairs of strings that get allocated and de-allocated every time we call this function
@@ -1494,7 +1500,7 @@ bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallb
 			}
 		}
 
-		const FString& LfsUserName = FGitSourceControlModule::Get().GetProvider().GetLockUser();
+		const FString& LfsUserName = GitSourceControlModule->GetProvider().GetLockUser();
 
 		for (const FString& Result : Results)
 		{
