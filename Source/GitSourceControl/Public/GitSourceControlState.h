@@ -83,7 +83,7 @@ namespace ELockState
 	{
 		Unset,
 		Unknown,
-		Unlockable,
+		NotLockable,
 		NotLocked,
 		Locked,
 		LockedOther,

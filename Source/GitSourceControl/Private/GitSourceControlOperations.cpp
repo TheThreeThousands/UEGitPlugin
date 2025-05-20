@@ -12,6 +12,7 @@
 #include "GitSourceControlModule.h"
 #include "GitSourceControlCommand.h"
 #include "GitSourceControlUtils.h"
+#include "GitSourceControlState.h"
 #include "SourceControlHelpers.h"
 #include "Logging/MessageLog.h"
 #include "Misc/MessageDialog.h"
@@ -28,6 +29,27 @@
 
 #define LOCTEXT_NAMESPACE "GitSourceControl"
 
+bool FGitSourceControlWorker::UpdateStates() const
+{
+	return GitSourceControlUtils::UpdateCachedStates(States);
+}
+
+
+void ReconcileWorkerStateWithStatusUpdate(const TMap<FString, FGitSourceControlState>& UpdatedStates, TMap<const FString, FGitState>& States)
+{
+	// Keep our known lock state updates.
+	TMap<const FString, FGitState> LockStateCopy = States;
+
+	GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
+
+	// Set the lock states back, UpdateStatus doesn't know about locks, so it will have written locks back to "Unset".
+	for (const auto& State : LockStateCopy)
+	{
+		States[State.Key].LockState = State.Value.LockState;
+		States[State.Key].LockUser = State.Value.LockUser;
+	}
+}
+
 FName FGitConnectWorker::GetName() const
 {
 	return "Connect";
@@ -35,6 +57,8 @@ FName FGitConnectWorker::GetName() const
 
 bool FGitConnectWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitConnectWorker::Execute);
+
 	// The connect worker checks if we are connected to the remote server.
 	check(InCommand.Operation->GetName() == GetName());
 	TSharedRef<FConnect, ESPMode::ThreadSafe> Operation = StaticCastSharedRef<FConnect>(InCommand.Operation);
@@ -99,6 +123,8 @@ FName FGitCheckOutWorker::GetName() const
 
 bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitCheckOutWorker::Execute);
+
 	// If we have nothing to process, exit immediately
 	if (InCommand.Files.Num() == 0)
 	{
@@ -127,30 +153,34 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 	const bool bSuccess = GitSourceControlUtils::RunLFSCommand(TEXT("lock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), LockableRelativeFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 	InCommand.bCommandSuccessful = bSuccess;
 	const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
+
+	TArray<FString> AbsoluteFiles;
+	AbsoluteFiles.Reserve(LockableRelativeFiles.Num());
+	FString GitPath = InCommand.PathToGitRoot;
+	Algo::Transform(LockableRelativeFiles, AbsoluteFiles, [&InCommand](const FString& RelativeFile)
+		{
+			FString AbsoluteFilePath = FPaths::Combine(InCommand.PathToGitRoot, RelativeFile);
+			FPaths::NormalizeFilename(AbsoluteFilePath);
+			return AbsoluteFilePath;
+		});
+
 	if (bSuccess)
 	{
-		TArray<FString> AbsoluteFiles;
-		for (const auto& RelativeFile : RelativeFiles)
+		for (const FString& AboluteFile : AbsoluteFiles)
 		{
-			FString AbsoluteFile = FPaths::Combine(InCommand.PathToGitRoot, RelativeFile);
-			FGitLockedFilesCache::AddLockedFile(AbsoluteFile, LockUser);
-			FPaths::NormalizeFilename(AbsoluteFile);
-			AbsoluteFiles.Add(AbsoluteFile);
+			FGitState& State = States.FindOrAdd(AboluteFile);
+			State.TreeState = ETreeState::Unset;
+			State.RemoteState = ERemoteState::Unset;
+			State.LockState = ELockState::Locked;
+			State.LockUser = LockUser;
 		}
-
-		GitSourceControlUtils::CollectNewStates(AbsoluteFiles, States, EFileState::Unset, ETreeState::Unset, ELockState::Locked);
-		for (auto& State : States)
-		{
-			State.Value.LockUser = LockUser;
-		}
+	}
+	else
+	{
+		FGitSourceControlModule::Get().GetProvider().Execute(ISourceControlOperation::Create<FGitLFSRefreshLocks>(), InCommand.Files);
 	}
 
 	return InCommand.bCommandSuccessful;
-}
-
-bool FGitCheckOutWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
 }
 
 static FText ParseCommitResults(const TArray<FString>& InResults)
@@ -172,6 +202,8 @@ const FText EmptyCommitMsg;
 
 bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitCheckInWorker::Execute);
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	TSharedRef<FCheckIn, ESPMode::ThreadSafe> Operation = StaticCastSharedRef<FCheckIn>(InCommand.Operation);
@@ -376,7 +408,11 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 						{
 							for (const auto& File : LockedFiles)
 							{
-								FGitLockedFilesCache::RemoveLockedFile(File);
+								FGitState& State = States.FindOrAdd(File);
+								State.TreeState = ETreeState::Unmodified;
+								State.RemoteState = ERemoteState::Unset;
+								State.LockState = ELockState::NotLocked;
+								State.LockUser = "";
 							}
 						}
 					}
@@ -404,7 +440,7 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 															   FilesToCheckIn.Array(), InCommand.ResultInfo.ErrorMessages, UpdatedStates);
 		if (bSuccess)
 		{
-			GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
+			ReconcileWorkerStateWithStatusUpdate(UpdatedStates, States);
 		}
 		GitSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 		return InCommand.bCommandSuccessful;
@@ -415,11 +451,6 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 	return false;
 }
 
-bool FGitCheckInWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
-}
-
 FName FGitMarkForAddWorker::GetName() const
 {
 	return "MarkForAdd";
@@ -427,6 +458,8 @@ FName FGitMarkForAddWorker::GetName() const
 
 bool FGitMarkForAddWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitMarkForAddWorker::Execute);
+
 	// If we have nothing to process, exit immediately
 	if (InCommand.Files.Num() == 0)
 	{
@@ -447,17 +480,12 @@ bool FGitMarkForAddWorker::Execute(FGitSourceControlCommand& InCommand)
 		bool bSuccess = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking, InCommand.Files, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
 		if (bSuccess)
 		{
-			GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
+			ReconcileWorkerStateWithStatusUpdate(UpdatedStates, States);
 		}
 		GitSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 	}
 
 	return InCommand.bCommandSuccessful;
-}
-
-bool FGitMarkForAddWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
 }
 
 FName FGitDeleteWorker::GetName() const
@@ -467,6 +495,8 @@ FName FGitDeleteWorker::GetName() const
 
 bool FGitDeleteWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitDeleteWorker::Execute);
+
 	// If we have nothing to process, exit immediately
 	if (InCommand.Files.Num() == 0)
 	{
@@ -487,19 +517,13 @@ bool FGitDeleteWorker::Execute(FGitSourceControlCommand& InCommand)
 		bool bSuccess = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking, InCommand.Files, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
 		if (bSuccess)
 		{
-			GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
+			ReconcileWorkerStateWithStatusUpdate(UpdatedStates, States);
 		}
 		GitSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 	}
 
 	return InCommand.bCommandSuccessful;
 }
-
-bool FGitDeleteWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
-}
-
 
 void GroupFileCommandsForRevert(const TArray<FString>& InFiles, TArray<FString>& FilesToRemove, TArray<FString>& FilesToCheckout, TArray<FString>& FilesToReset, TArray<FString>& FilesToDelete)
 {
@@ -547,6 +571,8 @@ FName FGitRevertWorker::GetName() const
 
 bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitRevertWorker::Execute);
+
 	InCommand.bCommandSuccessful = true;
 
 	// Filter files by status
@@ -608,15 +634,25 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 		GitSourceControlUtils::GetLockedFiles(RequestedReverts, LockedFiles);
 		if (LockedFiles.Num() > 0)
 		{
+			// TODO: Can we actually run "unlock" on multiple files in one command?
+			// This seems like a bug
 			const TArray<FString>& RelativeFiles = GitSourceControlUtils::RelativeFilenames(LockedFiles, InCommand.PathToGitRoot);
 			InCommand.bCommandSuccessful &= GitSourceControlUtils::RunLFSCommand(TEXT("unlock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), RelativeFiles,
 																				 InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 			if (InCommand.bCommandSuccessful)
 			{
-				for (const auto& File : LockedFiles)
+				for (const FString& AboluteFile : LockedFiles)
 				{
-					FGitLockedFilesCache::RemoveLockedFile(File);
+					FGitState& State = States.FindOrAdd(AboluteFile);
+					State.TreeState = ETreeState::Unmodified;
+					State.RemoteState = ERemoteState::Unset;
+					State.LockState = ELockState::NotLocked;
+					State.LockUser = "";
 				}
+			}
+			else
+			{
+				FGitSourceControlModule::Get().GetProvider().Execute(ISourceControlOperation::Create<FGitLFSRefreshLocks>(), InCommand.Files);
 			}
 		}
 	}
@@ -626,16 +662,11 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 	bool bSuccess = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking, RequestedReverts, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
 	if (bSuccess)
 	{
-		GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
+		ReconcileWorkerStateWithStatusUpdate(UpdatedStates, States);
 	}
 	GitSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 
 	return InCommand.bCommandSuccessful;
-}
-
-bool FGitRevertWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
 }
 
 FName FGitSyncWorker::GetName() const
@@ -645,6 +676,8 @@ FName FGitSyncWorker::GetName() const
 
 bool FGitSyncWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitSyncWorker::Execute);
+
 	FText SyncNotAllowedMessage(LOCTEXT("GitSync_NotAllowed_Msg", "Please exit Unreal Engine and update through GitHub Desktop to get latest changes."));
 	FText SyncNotAllowedTitle(LOCTEXT("GitSync_NotAllowed_Title", "Synching is not allowed"));
 	FMessageDialog::Open(EAppMsgType::Ok, SyncNotAllowedMessage, SyncNotAllowedTitle);
@@ -678,11 +711,6 @@ bool FGitSyncWorker::Execute(FGitSourceControlCommand& InCommand)
 	*/
 }
 
-bool FGitSyncWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
-}
-
 FName FGitFetch::GetName() const
 {
 	return "Fetch";
@@ -701,6 +729,8 @@ FName FGitFetchWorker::GetName() const
 
 bool FGitFetchWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitFetchWorker::Execute);
+
 	InCommand.bCommandSuccessful = GitSourceControlUtils::FetchRemote(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking,
 																	  InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 	if (!InCommand.bCommandSuccessful)
@@ -717,21 +747,17 @@ bool FGitFetchWorker::Execute(FGitSourceControlCommand& InCommand)
 		const TArray<FString> ProjectDirs {FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
 										   FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath())};
 		TMap<FString, FGitSourceControlState> UpdatedStates;
+		GitSourceControlUtils::RefreshLocks(InCommand.PathToRepositoryRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
 		InCommand.bCommandSuccessful = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking,
 																			  ProjectDirs, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
 		GitSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 		if (InCommand.bCommandSuccessful)
 		{
-			GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
+			ReconcileWorkerStateWithStatusUpdate(UpdatedStates, States);
 		}
 	}
 
 	return InCommand.bCommandSuccessful;
-}
-
-bool FGitFetchWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
 }
 
 FName FGitUpdateStatusWorker::GetName() const
@@ -741,6 +767,8 @@ FName FGitUpdateStatusWorker::GetName() const
 
 bool FGitUpdateStatusWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitUpdateStatusWorker::Execute);
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	TSharedRef<FUpdateStatus, ESPMode::ThreadSafe> Operation = StaticCastSharedRef<FUpdateStatus>(InCommand.Operation);
@@ -825,6 +853,8 @@ FName FGitCopyWorker::GetName() const
 
 bool FGitCopyWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitCopyWorker::Execute);
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	// Copy or Move operation on a single file : Git does not need an explicit copy nor move,
@@ -851,11 +881,6 @@ bool FGitCopyWorker::Execute(FGitSourceControlCommand& InCommand)
 	return InCommand.bCommandSuccessful;
 }
 
-bool FGitCopyWorker::UpdateStates() const
-{
-	return GitSourceControlUtils::UpdateCachedStates(States);
-}
-
 FName FGitResolveWorker::GetName() const
 {
 	return "Resolve";
@@ -863,6 +888,8 @@ FName FGitResolveWorker::GetName() const
 
 bool FGitResolveWorker::Execute( class FGitSourceControlCommand& InCommand )
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitResolveWorker::Execute);
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	// mark the conflicting files as resolved:
@@ -881,9 +908,65 @@ bool FGitResolveWorker::Execute( class FGitSourceControlCommand& InCommand )
 	return InCommand.bCommandSuccessful;
 }
 
-bool FGitResolveWorker::UpdateStates() const
+FName FGitLFSRefreshLocks::GetName() const
 {
-	return GitSourceControlUtils::UpdateCachedStates(States);
+	return "Refresh Locks";
+}
+
+FText FGitLFSRefreshLocks::GetInProgressString() const
+{
+	return LOCTEXT("SourceControl_RefreshLocks", "Fetching locks from server...");
+}
+
+FName FGitRefreshLockStateWorker::GetName() const
+{
+	return "Refreshing locks";
+}
+
+bool FGitRefreshLockStateWorker::Execute(class FGitSourceControlCommand& InCommand)
+{
+	// Git LFS locks is a slow command - regardless of how many files are passed in
+	// it does get slower as you introduce more locks, but definitely not linearly, in local testing a repo with 7,500 files locked
+	// takes about twice as long as a repo with 1 lock, so there's additional overhead with status updates, but you very quickly pay more for
+	// refreshing specific files than you do for refreshing all files, so beyond 2 files we will just refresh the whole project state.
+	// We can re-assess this if it becomes problematic anyway.
+	const int LocksThresholdForFullRefresh = 2;
+	const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
+
+	if (!InCommand.Files.IsEmpty() && InCommand.Files.Num() < LocksThresholdForFullRefresh)
+	{
+		TArray<FString> FilesToRefresh = GitSourceControlUtils::RelativeFilenames(InCommand.Files, InCommand.PathToGitRoot);
+
+		TArray<FString> Parameters{ "-p" };
+		for (const FString& FilePath : FilesToRefresh)
+		{
+			const bool bLockCheckSucceeded = GitSourceControlUtils::RunLFSCommand(TEXT("locks"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, Parameters, { FilePath }, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+			InCommand.bCommandSuccessful &= bLockCheckSucceeded;
+			if (bLockCheckSucceeded)
+			{
+				FGitState& State = States.FindOrAdd(FilePath);
+				State.TreeState = ETreeState::Unset;
+				State.RemoteState = ERemoteState::Unset;
+				State.LockState = ELockState::NotLocked;
+				State.LockUser = "";
+
+				if (!InCommand.ResultInfo.InfoMessages.IsEmpty())
+				{
+					// The result of this call should contain only 1 entry, telling us who holds the lock, since we only asked for the lock owner of 1 file.
+					// project/path/to/file/filename    Jane Doe    id:####
+					check(InCommand.ResultInfo.InfoMessages.Num() == 1);
+					GitSourceControlUtils::FGitLfsLocksParser LockInfo(InCommand.PathToRepositoryRoot, InCommand.ResultInfo.InfoMessages.Last());
+					State.LockState = LockInfo.LockUser == LockUser ? ELockState::Locked : ELockState::LockedOther;
+					State.LockUser = LockInfo.LockUser;
+				}
+			}
+		}
+	}
+	else
+	{
+		InCommand.bCommandSuccessful = GitSourceControlUtils::RefreshLocks(InCommand.PathToRepositoryRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+	}
+	return InCommand.bCommandSuccessful;
 }
 
 #if ENGINE_MAJOR_VERSION == 5
@@ -899,6 +982,8 @@ bool FGitMoveToChangelistWorker::UpdateStates() const
 
 bool FGitMoveToChangelistWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitMoveToChangelistWorker::Execute);
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	FGitSourceControlChangelist DestChangelist = InCommand.Changelist;
@@ -929,6 +1014,8 @@ FName FGitUpdateStagingWorker::GetName() const
 
 bool FGitUpdateStagingWorker::Execute(FGitSourceControlCommand& InCommand)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FGitUpdateStagingWorker::Execute);
+
 	return GitSourceControlUtils::UpdateChangelistStateByCommand();
 }
 

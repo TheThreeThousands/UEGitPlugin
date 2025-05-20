@@ -25,6 +25,26 @@ public:
 	bool bUpdateStatus = false;
 };
 
+class FGitLFSRefreshLocks : public ISourceControlOperation
+{
+	// ISourceControlOperation interface
+	virtual FName GetName() const override;
+
+	virtual FText GetInProgressString() const override;
+};
+
+class FGitSourceControlWorker : public IGitSourceControlWorker
+{
+public:
+	virtual ~FGitSourceControlWorker() {}
+
+	virtual bool UpdateStates() const final;
+
+	protected:
+	/** Temporary states for results */
+	TMap<const FString, FGitState> States;
+};
+
 /** Called when first activated on a project, and then at project load time.
  *  Look for the root directory of the git repository (where the ".git/" subdirectory is located). */
 class FGitConnectWorker : public IGitSourceControlWorker
@@ -35,93 +55,66 @@ public:
 	virtual FName GetName() const override;
 	virtual bool Execute(class FGitSourceControlCommand& InCommand) override;
 	virtual bool UpdateStates() const override;
-
-	/** Temporary states for results */
-	TMap<const FString, FGitState> States;
 };
 
 /** Lock (check-out) a set of files using Git LFS 2. */
-class FGitCheckOutWorker : public IGitSourceControlWorker
+class FGitCheckOutWorker : public FGitSourceControlWorker
 {
 public:
 	virtual ~FGitCheckOutWorker() {}
 	// IGitSourceControlWorker interface
 	virtual FName GetName() const override;
 	virtual bool Execute(class FGitSourceControlCommand& InCommand) override;
-	virtual bool UpdateStates() const override;
-
-	/** Temporary states for results */
-	TMap<const FString, FGitState> States;
 };
 
 /** Commit (check-in) a set of files to the local depot. */
-class FGitCheckInWorker : public IGitSourceControlWorker
+class FGitCheckInWorker : public FGitSourceControlWorker
 {
 public:
 	virtual ~FGitCheckInWorker() {}
 	// IGitSourceControlWorker interface
 	virtual FName GetName() const override;
 	virtual bool Execute(class FGitSourceControlCommand& InCommand) override;
-	virtual bool UpdateStates() const override;
-
-	/** Temporary states for results */
-	TMap<const FString, FGitState> States;
 };
 
 /** Add an untracked file to revision control (so only a subset of the git add command). */
-class FGitMarkForAddWorker : public IGitSourceControlWorker
+class FGitMarkForAddWorker : public FGitSourceControlWorker
 {
 public:
 	virtual ~FGitMarkForAddWorker() {}
 	// IGitSourceControlWorker interface
 	virtual FName GetName() const override;
-	virtual bool Execute(class FGitSourceControlCommand& InCommand) override;
-	virtual bool UpdateStates() const override;
-
-	/** Temporary states for results */
-	TMap<const FString, FGitState> States;
+	virtual bool Execute(class FGitSourceControlCommand& InCommand) override;;
 };
 
 /** Delete a file and remove it from revision control. */
-class FGitDeleteWorker : public IGitSourceControlWorker
+class FGitDeleteWorker : public FGitSourceControlWorker
 {
 public:
 	virtual ~FGitDeleteWorker() {}
 	// IGitSourceControlWorker interface
 	virtual FName GetName() const override;
 	virtual bool Execute(class FGitSourceControlCommand& InCommand) override;
-	virtual bool UpdateStates() const override;
-
-	/** Temporary states for results */
-	TMap<const FString, FGitState> States;
 };
 
 /** Revert any change to a file to its state on the local depot. */
-class FGitRevertWorker : public IGitSourceControlWorker
+class FGitRevertWorker : public FGitSourceControlWorker
 {
 public:
 	virtual ~FGitRevertWorker() {}
 	// IGitSourceControlWorker interface
 	virtual FName GetName() const override;
 	virtual bool Execute(class FGitSourceControlCommand& InCommand) override;
-	virtual bool UpdateStates() const override;
-
-	/** Temporary states for results */
-	TMap<const FString, FGitState> States;
 };
 
 /** Git pull --rebase to update branch from its configured remote */
-class FGitSyncWorker : public IGitSourceControlWorker
+class FGitSyncWorker : public FGitSourceControlWorker
 {
 public:
 	virtual ~FGitSyncWorker() {}
 	// IGitSourceControlWorker interface
 	virtual FName GetName() const override;
 	virtual bool Execute(class FGitSourceControlCommand& InCommand) override;
-	virtual bool UpdateStates() const override;
-
-	/** Temporary states for results */
-	TMap<const FString, FGitState> States;
 };
 
 /** Get revision control status of files on local working copy. */
@@ -143,44 +136,32 @@ public:
 };
 
 /** Copy or Move operation on a single file */
-class FGitCopyWorker : public IGitSourceControlWorker
+class FGitCopyWorker : public FGitSourceControlWorker
 {
 public:
 	virtual ~FGitCopyWorker() {}
 	// IGitSourceControlWorker interface
 	virtual FName GetName() const override;
 	virtual bool Execute(class FGitSourceControlCommand& InCommand) override;
-	virtual bool UpdateStates() const override;
-
-	/** Temporary states for results */
-	TMap<const FString, FGitState> States;
 };
 
 /** git add to mark a conflict as resolved */
-class FGitResolveWorker : public IGitSourceControlWorker
+class FGitResolveWorker : public FGitSourceControlWorker
 {
 public:
 	virtual ~FGitResolveWorker() {}
 	virtual FName GetName() const override;
 	virtual bool Execute(class FGitSourceControlCommand& InCommand) override;
-	virtual bool UpdateStates() const override;
-
-	/** Temporary states for results */
-	TMap<const FString, FGitState> States;
 };
 
 /** Git push to publish branch for its configured remote */
-class FGitFetchWorker : public IGitSourceControlWorker
+class FGitFetchWorker : public FGitSourceControlWorker
 {
 public:
 	virtual ~FGitFetchWorker() {}
 	// IGitSourceControlWorker interface
 	virtual FName GetName() const override;
 	virtual bool Execute(class FGitSourceControlCommand& InCommand) override;
-	virtual bool UpdateStates() const override;
-
-	/** Temporary states for results */
-	TMap<const FString, FGitState> States;
 };
 
 #if ENGINE_MAJOR_VERSION == 5
@@ -208,5 +189,14 @@ public:
 	
 	/** Temporary states for results */
 	TMap<const FString, FGitState> States;
+};
+
+class FGitRefreshLockStateWorker : public FGitSourceControlWorker
+{
+public:
+	virtual ~FGitRefreshLockStateWorker() {}
+	// IGitSourceControlWorker interface
+	virtual FName GetName() const override;
+	virtual bool Execute(class FGitSourceControlCommand& InCommand) override;
 };
 #endif

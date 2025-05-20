@@ -39,35 +39,27 @@ private:
 
 struct FGitVersion;
 
-class FGitLockedFilesCache
-{
-public:
-	static FDateTime LastUpdated;
-	static FCriticalSection LockedFilesLock;
-
-	static const TMap<FString, FString>& GetLockedFiles() { return LockedFiles; }
-	static void AddLockedFile(const FString& filePath, const FString& lockUser);
-	static void RemoveLockedFile(const FString& filePath);
-
-	static bool Contains(const FString& filePath);
-	static bool TryGetLockOwner(const FString& filePath, FString& outLockOwner);
-
-	static void SwapLockedFiles(TMap<FString, FString>& NewLocks);
-
-	static bool HasCacheExpired();
-
-private:
-	static void NotifyChangedLocks(const TMap<FString, FString>& newLocks, const TMap<FString, FString>& oldLocks);
-
-	// update local file readonly state when our own lock statuses change
-	static void OnFileLockChanged(const FString& filePath, const FString& lockUser, bool locked);
-
-	static TMap<FString, FString> LockedFiles;
-	static FTimespan CacheTimeout;
-};
-
 namespace GitSourceControlUtils
 {
+	/**
+	 * Parse informations on a file locked with Git LFS
+	 *
+	 * Examples output of "git lfs locks":
+	Content\ThirdPersonBP\Blueprints\ThirdPersonCharacter.uasset    SRombauts       ID:891
+	Content\ThirdPersonBP\Blueprints\ThirdPersonCharacter.uasset                    ID:891
+	Content\ThirdPersonBP\Blueprints\ThirdPersonCharacter.uasset    ID:891
+	 */
+	class FGitLfsLocksParser
+	{
+	public:
+		FGitLfsLocksParser(const FString& InRepositoryRoot, const FString& InStatus, const bool bAbsolutePaths = true);
+
+		// Filename on disk
+		FString LocalFilename;
+		// Name of user who has file locked
+		FString LockUser;
+	};
+
 	/**
 		*  Returns an updated repo root if all selected files are in a plugin subfolder, and the plugin subfolder is a git repo
 		*  This supports the case where each plugin is a sub module
@@ -344,7 +336,7 @@ TArray<FString> AbsoluteFilenames(const TArray<FString>& InFileNames, const FStr
  */
 void RemoveRedundantErrors(FGitSourceControlCommand& InCommand, const FString& InFilter);
 
-	bool RunLFSCommand(const FString& InCommand, const FString& InRepositoryRoot, const FString& GitBinaryFallback, const TArray<FString>& InParameters, const TArray<FString>& InFiles, TArray<FString>& OutResults, TArray<FString>& OutErrorMessages);
+bool RunLFSCommand(const FString& InCommand, const FString& InRepositoryRoot, const FString& GitBinaryFallback, const TArray<FString>& InParameters, const TArray<FString>& InFiles, TArray<FString>& OutResults, TArray<FString>& OutErrorMessages);
 
 /**
  * Helper function for various commands to update cached states.
@@ -365,14 +357,14 @@ GITSOURCECONTROL_API bool CollectNewStates( const TMap< FString, FGitSourceContr
 bool CollectNewStates(const TArray<FString>& InFiles, TMap<const FString, FGitState>& OutResults, EFileState::Type FileState, ETreeState::Type TreeState = ETreeState::Unset, ELockState::Type LockState = ELockState::Unset, ERemoteState::Type RemoteState = ERemoteState::Unset);
 
 /**
-	* Run "git lfs locks" to update lock states if it hasn't been run recently - if it has been run recently, this function is a no-op
+	* Run "git lfs locks" to update lock states
 	*
 	* @param	InRepositoryRoot	The Git repository from where to run the command - usually the Game directory
-	* @param   GitBinaryFallBack   The Git binary fallback path
-	* @param	OutErrorMessages    Any errors (from StdErr) as an array per-line
-	* @param	bInvalidateCache	Force refresh the lock states from the server using git lfs locks regardless of when we last refreshed the cache.
+	* @param	GitBinaryFallBack	The Git binary fallback path
+	* @param	OutErrorMessages	Any errors (from StdErr) as an array per-line
+	* @param	OutStates			Map of updated lock states
 */
-void RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallBack, TArray<FString>& OutErrorMessages, bool bInvalidateCache = false);
+bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallBack, TArray<FString>& OutErrorMessages, TMap<const FString, FGitState>& OutStates);
 
 /**
  * Gets locks from state cache
