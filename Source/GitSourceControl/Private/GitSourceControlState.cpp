@@ -234,11 +234,12 @@ FText FGitSourceControlState::GetDisplayTooltip() const
 	case EGitState::Ignored:
 		return LOCTEXT("Ignored_Tooltip", "Item is being ignored.");
 	case EGitState::None:
-		if (State.LockState != ELockState::NotLockable && !FPlatformFileManager::Get().GetPlatformFile().IsReadOnly(*GetFilename()))
+		return LOCTEXT("Unknown_Tooltip", "Unknown revision control state");
+	case EGitState::Lockable:
+		if (!FPlatformFileManager::Get().GetPlatformFile().IsReadOnly(*GetFilename()))
 		{
 			return LOCTEXT("WritableModified_Tooltip", "The file(s) are marked writable");
 		}
-		return LOCTEXT("Unknown_Tooltip", "Unknown revision control state");
 	default:
 		return FText();
 	}
