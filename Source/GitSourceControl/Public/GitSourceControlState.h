@@ -183,6 +183,8 @@ public:
 	virtual bool IsConflicted() const override;
 	virtual bool CanRevert() const override;
 
+	virtual TOptional<FText> GetWarningText() const override;
+
 private:
 	EGitState::Type GetGitState() const;
 
