@@ -115,14 +115,11 @@ FSlateIcon FGitSourceControlState::GetIcon() const
 	case EGitState::Deleted:
 		return GET_ICON_RETURN(MarkedForDelete);
 	case EGitState::Modified:
-		if (State.LockState == ELockState::Locked)
+		if (State.LockState == ELockState::Locked || State.LockState == ELockState::NotLockable)
 		{
 			return GET_ICON_RETURN(CheckedOutModified);
 		}
-		else if (State.LockState != ELockState::NotLockable)
-		{
-			return GET_ICON_RETURN(WritableModified);
-		}
+		return GET_ICON_RETURN(WritableModified);
 	case EGitState::CheckedOut:
 		return GET_ICON_RETURN(CheckedOutUnmodified);
 	case EGitState::Ignored:
@@ -221,14 +218,11 @@ FText FGitSourceControlState::GetDisplayTooltip() const
 	case EGitState::Deleted:
 		return LOCTEXT("MarkedForDelete_Tooltip", "The file(s) are marked for delete");
 	case EGitState::Modified:
-		if (State.LockState == ELockState::Locked)
+		if (State.LockState == ELockState::Locked || State.LockState == ELockState::NotLockable)
 		{
 			return LOCTEXT("CheckedOutModified_Tooltip", "The file(s) are checked out and modified.");
 		}
-		else if (State.LockState != ELockState::NotLockable)
-		{
-			return LOCTEXT("WritableModified_Tooltip", "The file(s) are marked writable and modified");
-		}
+		return LOCTEXT("WritableModified_Tooltip", "The file(s) are marked writable and modified");
 	case EGitState::CheckedOut:
 		return LOCTEXT("CheckedOut_Tooltip", "The file(s) are checked out");
 	case EGitState::Ignored:
