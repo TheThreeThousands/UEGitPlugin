@@ -384,11 +384,19 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 			InCommand.bCommandSuccessful = true;
 		}
 
-		// git-lfs: unlock files
-		if (InCommand.bUsingGitLfsLocking)
+		if (InCommand.bCommandSuccessful)
 		{
-			// If we successfully pushed (or didn't need to push), unlock the files marked for check in
-			if (InCommand.bCommandSuccessful)
+			for (const auto& File : InCommand.Files)
+			{
+				FGitState& State = States.FindOrAdd(File);
+				State.TreeState = ETreeState::Unmodified;
+				State.RemoteState = ERemoteState::Unset;
+				State.LockState = ELockState::NotLocked;
+				State.LockUser = "";
+			}
+
+			// git-lfs: unlock files
+			if (InCommand.bUsingGitLfsLocking)
 			{
 				// unlock files: execute the LFS command on relative filenames
 				// (unlock only locked files, that is, not Added files)
@@ -402,18 +410,12 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 					{
 						// Not strictly necessary to succeed, so don't update command success
 						const bool bUnlockSuccess = GitSourceControlUtils::RunLFSCommand(TEXT("unlock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary,
-																						 FGitSourceControlModule::GetEmptyStringArray(), FilesToUnlock,
-																						 InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-						if (bUnlockSuccess)
+							FGitSourceControlModule::GetEmptyStringArray(), FilesToUnlock,
+							InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+
+						if (!bUnlockSuccess)
 						{
-							for (const auto& File : LockedFiles)
-							{
-								FGitState& State = States.FindOrAdd(File);
-								State.TreeState = ETreeState::Unmodified;
-								State.RemoteState = ERemoteState::Unset;
-								State.LockState = ELockState::NotLocked;
-								State.LockUser = "";
-							}
+							FGitSourceControlModule::Get().GetProvider().Execute(ISourceControlOperation::Create<FGitLFSRefreshLocks>(), InCommand.Files);
 						}
 					}
 				}
