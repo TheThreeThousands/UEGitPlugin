@@ -910,7 +910,7 @@ bool FGitResolveWorker::Execute( class FGitSourceControlCommand& InCommand )
 
 FName FGitLFSRefreshLocks::GetName() const
 {
-	return "Refresh Locks";
+	return "RefreshLocks";
 }
 
 FText FGitLFSRefreshLocks::GetInProgressString() const
@@ -920,7 +920,7 @@ FText FGitLFSRefreshLocks::GetInProgressString() const
 
 FName FGitRefreshLockStateWorker::GetName() const
 {
-	return "Refreshing locks";
+	return "RefreshingLocks";
 }
 
 bool FGitRefreshLockStateWorker::Execute(class FGitSourceControlCommand& InCommand)
