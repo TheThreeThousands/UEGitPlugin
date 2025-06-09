@@ -191,7 +191,7 @@ void FGitSourceControlProvider::CheckRepositoryStatus()
 
 				if (GitSourceControlUtils::CollectNewStates(States, Results))
 				{
-					GitSourceControlUtils::RefreshLocks(PathToRepositoryRoot, PathToGitBinary, StatusErrorMessages, Results);
+					GitSourceControlUtils::RefreshLocks({}, PathToRepositoryRoot, PathToGitBinary, StatusErrorMessages, Results);
 					GitSourceControlUtils::UpdateCachedStates(Results);
 				}
 				Runner = new FGitSourceControlRunner();

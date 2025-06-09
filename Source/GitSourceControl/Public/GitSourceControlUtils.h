@@ -364,7 +364,7 @@ bool CollectNewStates(const TArray<FString>& InFiles, TMap<const FString, FGitSt
 	* @param	OutErrorMessages	Any errors (from StdErr) as an array per-line
 	* @param	OutStates			Map of updated lock states
 */
-bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallBack, TArray<FString>& OutErrorMessages, TMap<const FString, FGitState>& OutStates);
+bool RefreshLocks(const TArray<FString>& FilesToRefresh, const FString& InRepositoryRoot, const FString& GitBinaryFallBack, TArray<FString>& OutErrorMessages, TMap<const FString, FGitState>& OutStates);
 
 /**
  * Gets locks from state cache

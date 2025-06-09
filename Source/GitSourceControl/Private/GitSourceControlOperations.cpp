@@ -177,7 +177,7 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 	}
 	else
 	{
-		FGitSourceControlModule::Get().GetProvider().Execute(ISourceControlOperation::Create<FGitLFSRefreshLocks>(), InCommand.Files);
+		InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
 	}
 
 	return InCommand.bCommandSuccessful;
@@ -415,7 +415,7 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 
 						if (!bUnlockSuccess)
 						{
-							FGitSourceControlModule::Get().GetProvider().Execute(ISourceControlOperation::Create<FGitLFSRefreshLocks>(), InCommand.Files);
+							InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
 						}
 					}
 				}
@@ -654,7 +654,7 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 			}
 			else
 			{
-				FGitSourceControlModule::Get().GetProvider().Execute(ISourceControlOperation::Create<FGitLFSRefreshLocks>(), InCommand.Files);
+				InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(LockedFiles, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
 			}
 		}
 	}
@@ -749,7 +749,7 @@ bool FGitFetchWorker::Execute(FGitSourceControlCommand& InCommand)
 		const TArray<FString> ProjectDirs {FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
 										   FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath())};
 		TMap<FString, FGitSourceControlState> UpdatedStates;
-		GitSourceControlUtils::RefreshLocks(InCommand.PathToRepositoryRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+		GitSourceControlUtils::RefreshLocks({}, InCommand.PathToRepositoryRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
 		InCommand.bCommandSuccessful = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking,
 																			  ProjectDirs, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
 		GitSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
@@ -907,67 +907,6 @@ bool FGitResolveWorker::Execute( class FGitSourceControlCommand& InCommand )
 		GitSourceControlUtils::CollectNewStates(UpdatedStates, States);
 	}
 
-	return InCommand.bCommandSuccessful;
-}
-
-FName FGitLFSRefreshLocks::GetName() const
-{
-	return "RefreshLocks";
-}
-
-FText FGitLFSRefreshLocks::GetInProgressString() const
-{
-	return LOCTEXT("SourceControl_RefreshLocks", "Fetching locks from server...");
-}
-
-FName FGitRefreshLockStateWorker::GetName() const
-{
-	return "RefreshingLocks";
-}
-
-bool FGitRefreshLockStateWorker::Execute(class FGitSourceControlCommand& InCommand)
-{
-	// Git LFS locks is a slow command - regardless of how many files are passed in
-	// it does get slower as you introduce more locks, but definitely not linearly, in local testing a repo with 7,500 files locked
-	// takes about twice as long as a repo with 1 lock, so there's additional overhead with status updates, but you very quickly pay more for
-	// refreshing specific files than you do for refreshing all files, so beyond 2 files we will just refresh the whole project state.
-	// We can re-assess this if it becomes problematic anyway.
-	const int LocksThresholdForFullRefresh = 2;
-	const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
-
-	if (!InCommand.Files.IsEmpty() && InCommand.Files.Num() < LocksThresholdForFullRefresh)
-	{
-		TArray<FString> FilesToRefresh = GitSourceControlUtils::RelativeFilenames(InCommand.Files, InCommand.PathToGitRoot);
-
-		TArray<FString> Parameters{ "-p" };
-		for (const FString& FilePath : FilesToRefresh)
-		{
-			const bool bLockCheckSucceeded = GitSourceControlUtils::RunLFSCommand(TEXT("locks"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, Parameters, { FilePath }, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-			InCommand.bCommandSuccessful &= bLockCheckSucceeded;
-			if (bLockCheckSucceeded)
-			{
-				FGitState& State = States.FindOrAdd(FilePath);
-				State.TreeState = ETreeState::Unset;
-				State.RemoteState = ERemoteState::Unset;
-				State.LockState = ELockState::NotLocked;
-				State.LockUser = "";
-
-				if (!InCommand.ResultInfo.InfoMessages.IsEmpty())
-				{
-					// The result of this call should contain only 1 entry, telling us who holds the lock, since we only asked for the lock owner of 1 file.
-					// project/path/to/file/filename    Jane Doe    id:####
-					check(InCommand.ResultInfo.InfoMessages.Num() == 1);
-					GitSourceControlUtils::FGitLfsLocksParser LockInfo(InCommand.PathToRepositoryRoot, InCommand.ResultInfo.InfoMessages.Last());
-					State.LockState = LockInfo.LockUser == LockUser ? ELockState::Locked : ELockState::LockedOther;
-					State.LockUser = LockInfo.LockUser;
-				}
-			}
-		}
-	}
-	else
-	{
-		InCommand.bCommandSuccessful = GitSourceControlUtils::RefreshLocks(InCommand.PathToRepositoryRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
-	}
 	return InCommand.bCommandSuccessful;
 }
 
