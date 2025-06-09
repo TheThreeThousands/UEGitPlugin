@@ -1465,6 +1465,14 @@ bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallb
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(GitSourceControlUtils::RefreshLocks);
 
+	const FGitSourceControlModule* GitSourceControlModule = FGitSourceControlModule::GetThreadSafe();
+	if (GitSourceControlModule == nullptr)
+	{
+		return false;
+	}
+	
+	const FString& LfsUserName = GitSourceControlModule->GetProvider().GetLockUser();
+
 	// Refresh could be called from multiple threads concurrently
 	// The NewLocks static here gets swapped with our locks cache, this is a static and not a member to avoid unnecessary allocations
 	// in large projects utilizing OFPA, the locks list could be potentially thousands of pairs of strings that get allocated and de-allocated every time we call this function
@@ -1493,8 +1501,6 @@ bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallb
 				State.Value.LockState = ELockState::NotLocked;
 			}
 		}
-
-		const FString& LfsUserName = FGitSourceControlModule::Get().GetProvider().GetLockUser();
 
 		for (const FString& Result : Results)
 		{
@@ -1598,6 +1604,14 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(GitSourceControlUtils::RunUpdateStatus);
 
+	FGitSourceControlModule* GitSourceControlModule = FGitSourceControlModule::GetThreadSafe();
+	if (GitSourceControlModule == nullptr)
+	{
+		return false;
+	};
+	
+	FGitSourceControlProvider& provider = GitSourceControlModule->GetProvider();
+
 	// Remove files that aren't in the repository
 	const TArray<FString>& RepoFiles = InFiles.FilterByPredicate([InRepositoryRoot](const FString& File) { return File.StartsWith(InRepositoryRoot); });
 
@@ -1633,7 +1647,6 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
 	// Unless somebody used a force push, but that edge case isn't worth the increased cost of running these status updates.
 	// NB:	It is important to still update the local status, as saving files doesn't mark them as modified in source control
 	//		The engine relies on this status update to update the file to reflect that it is modified
-	FGitSourceControlProvider& provider = FGitSourceControlModule::Get().GetProvider();
 	TArray<TSharedRef<ISourceControlState, ESPMode::ThreadSafe>> States;
 	provider.GetState(InFiles, States, EStateCacheUsage::Use);
 
