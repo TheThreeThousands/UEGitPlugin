@@ -749,7 +749,7 @@ bool FGitFetchWorker::Execute(FGitSourceControlCommand& InCommand)
 		const TArray<FString> ProjectDirs {FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
 										   FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath())};
 		TMap<FString, FGitSourceControlState> UpdatedStates;
-		GitSourceControlUtils::RefreshLocks({}, InCommand.PathToRepositoryRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+		GitSourceControlUtils::RefreshLocks(FGitSourceControlModule::GetEmptyStringArray(), InCommand.PathToRepositoryRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
 		InCommand.bCommandSuccessful = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking,
 																			  ProjectDirs, InCommand.ResultInfo.ErrorMessages, UpdatedStates);
 		GitSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
