@@ -359,6 +359,7 @@ bool CollectNewStates(const TArray<FString>& InFiles, TMap<const FString, FGitSt
 /**
 	* Run "git lfs locks" to update lock states
 	*
+	* @param	FilesToRefresh		The list of files to refresh the locks for (Empty to refresh all locks)
 	* @param	InRepositoryRoot	The Git repository from where to run the command - usually the Game directory
 	* @param	GitBinaryFallBack	The Git binary fallback path
 	* @param	OutErrorMessages	Any errors (from StdErr) as an array per-line
