@@ -1461,7 +1461,7 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	OutErrorMessages.Append(ErrorMessages);
 }
 
-bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, TMap<const FString, FGitState>& OutStates)
+bool RefreshLocks(const TArray<FString>& FilesToRefresh, const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, TMap<const FString, FGitState>& OutStates)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(GitSourceControlUtils::RefreshLocks);
 
@@ -1480,40 +1480,86 @@ bool RefreshLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallb
 	static FCriticalSection ConcurrencyProtection;
 	FScopeLock Lock(&ConcurrencyProtection);
 	
-	TArray<FString> Results;
-	bool bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, FGitSourceControlModule::GetEmptyStringArray(), FGitSourceControlModule::GetEmptyStringArray(),
-							Results, OutErrorMessages);
+	// Git LFS locks is a slow command - regardless of how many files are passed in
+	// it does get slower as you introduce more locks, but definitely not linearly, in local testing a repo with 7,500 files locked
+	// takes about twice as long as a repo with 1 lock, so there's additional overhead with status updates, but you very quickly pay more for
+	// refreshing specific files than you do for refreshing all files, so beyond 2 files we will just refresh the whole project state.
+	// We can re-assess this if it becomes problematic anyway.
+	const int LocksThresholdForFullRefresh = 2;
+	const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
 
-	// If we can't connect to server, fall back to our cached lock state - there's no guarantee that the state hasn't changed on the server, but it's better than not showing locks at all.
-	if (!bResult)
-	{
-		bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, { TEXT("--cached") }, FGitSourceControlModule::GetEmptyStringArray(),
-			Results, OutErrorMessages);
-	}
+	bool bResult = true;
 
-	if (bResult)
+	if (!FilesToRefresh.IsEmpty() && FilesToRefresh.Num() < LocksThresholdForFullRefresh)
 	{
-		// Reset all lock states to be not locked, then override any which are locked to reflect that
-		for (auto& State : OutStates)
+		TArray<FString> RelativeFiles = GitSourceControlUtils::RelativeFilenames(FilesToRefresh, InRepositoryRoot);
+
+		TArray<FString> Parameters{ "-p" };
+		for (const FString& FilePath : RelativeFiles)
 		{
-			if (State.Value.LockState != ELockState::NotLockable)
+			TArray<FString> Responses;
+			const bool bLockCheckSucceeded = GitSourceControlUtils::RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, Parameters, { FilePath }, Responses, OutErrorMessages);
+			bResult &= bLockCheckSucceeded;
+			if (bLockCheckSucceeded)
 			{
-				State.Value.LockState = ELockState::NotLocked;
+				FGitState& State = OutStates.FindOrAdd(FilePath);
+				State.TreeState = ETreeState::Unset;
+				State.RemoteState = ERemoteState::Unset;
+				State.LockState = ELockState::NotLocked;
+				State.LockUser = "";
+
+				if (!Responses.IsEmpty())
+				{
+					// The result of this call should contain only 1 entry, telling us who holds the lock, since we only asked for the lock owner of 1 file.
+					// project/path/to/file/filename    Jane Doe    id:####
+					check(Responses.Num() == 1);
+					GitSourceControlUtils::FGitLfsLocksParser LockInfo(InRepositoryRoot, Responses.Last());
+					State.LockState = LockInfo.LockUser == LockUser ? ELockState::Locked : ELockState::LockedOther;
+					State.LockUser = LockInfo.LockUser;
+				}
 			}
 		}
+	}
+	else
+	{
+		TArray<FString> Results;
+		bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, FGitSourceControlModule::GetEmptyStringArray(), FGitSourceControlModule::GetEmptyStringArray(),
+			Results, OutErrorMessages);
 
-		for (const FString& Result : Results)
+		// If we can't connect to server, fall back to our cached lock state - there's no guarantee that the state hasn't changed on the server, but it's better than not showing locks at all.
+		if (!bResult)
 		{
-			FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
-#if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
-			UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
-#endif	
-			FGitState& State = OutStates.FindOrAdd(LockFile.LocalFilename);
+			bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, { TEXT("--cached") }, FGitSourceControlModule::GetEmptyStringArray(),
+				Results, OutErrorMessages);
+		}
 
-			State.LockState = LockFile.LockUser == LfsUserName ? ELockState::Locked : ELockState::LockedOther;
-			State.LockUser = LockFile.LockUser;
+		if (bResult)
+		{
+			// Reset all lock states to be not locked, then override any which are locked to reflect that
+			for (auto& State : OutStates)
+			{
+				if (State.Value.LockState != ELockState::NotLockable)
+				{
+					State.Value.LockState = ELockState::NotLocked;
+				}
+			}
+
+			const FString& LfsUserName = FGitSourceControlModule::Get().GetProvider().GetLockUser();
+
+			for (const FString& Result : Results)
+			{
+				FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
+#if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
+				UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
+#endif	
+				FGitState& State = OutStates.FindOrAdd(LockFile.LocalFilename);
+
+				State.LockState = LockFile.LockUser == LfsUserName ? ELockState::Locked : ELockState::LockedOther;
+				State.LockUser = LockFile.LockUser;
+			}
 		}
 	}
+
 
 	return bResult;
 }
