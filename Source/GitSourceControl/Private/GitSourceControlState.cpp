@@ -12,6 +12,8 @@
 #endif
 #endif
 
+#include "HAL/PlatformFileManager.h"
+
 #define LOCTEXT_NAMESPACE "GitSourceControl.State"
 
 int32 FGitSourceControlState::GetHistorySize() const
@@ -113,10 +115,20 @@ FSlateIcon FGitSourceControlState::GetIcon() const
 	case EGitState::Deleted:
 		return GET_ICON_RETURN(MarkedForDelete);
 	case EGitState::Modified:
+		if (State.LockState == ELockState::Locked || State.LockState == ELockState::NotLockable)
+		{
+			return GET_ICON_RETURN(CheckedOutModified);
+		}
+		return GET_ICON_RETURN(WritableModified);
 	case EGitState::CheckedOut:
-		return GET_ICON_RETURN(CheckedOut);
+		return GET_ICON_RETURN(CheckedOutUnmodified);
 	case EGitState::Ignored:
 		return GET_ICON_RETURN(NotInDepot);
+	case EGitState::Lockable:
+		if (!FPlatformFileManager::Get().GetPlatformFile().IsReadOnly(*GetFilename()))
+		{
+			return GET_ICON_RETURN(WritableUnmodified);
+		}
 	default:
 #if ENGINE_MAJOR_VERSION < 5
 	  return NAME_None;
@@ -206,14 +218,22 @@ FText FGitSourceControlState::GetDisplayTooltip() const
 	case EGitState::Deleted:
 		return LOCTEXT("MarkedForDelete_Tooltip", "The file(s) are marked for delete");
 	case EGitState::Modified:
+		if (State.LockState == ELockState::Locked || State.LockState == ELockState::NotLockable)
+		{
+			return LOCTEXT("CheckedOutModified_Tooltip", "The file(s) are checked out and modified.");
+		}
+		return LOCTEXT("WritableModified_Tooltip", "The file(s) are marked writable and modified");
 	case EGitState::CheckedOut:
 		return LOCTEXT("CheckedOut_Tooltip", "The file(s) are checked out");
 	case EGitState::Ignored:
 		return LOCTEXT("Ignored_Tooltip", "Item is being ignored.");
-	case EGitState::Lockable:
-		return LOCTEXT("ReadOnly_Tooltip", "The file(s) are marked locally as read-only");
 	case EGitState::None:
 		return LOCTEXT("Unknown_Tooltip", "Unknown revision control state");
+	case EGitState::Lockable:
+		if (!FPlatformFileManager::Get().GetPlatformFile().IsReadOnly(*GetFilename()))
+		{
+			return LOCTEXT("WritableModified_Tooltip", "The file(s) are marked writable");
+		}
 	default:
 		return FText();
 	}
@@ -396,6 +416,21 @@ bool FGitSourceControlState::CanRevert() const
 	// Can revert the file state if we modified, even if it was locked by someone else.
 	// Useful for when someone locked a file, and you just wanna play around with it locallly, and then revert it.
 	return CanCheckIn() || IsModified();
+}
+
+TOptional<FText> FGitSourceControlState::GetWarningText() const
+{
+	TOptional<FText> WarningText = ISourceControlState::GetWarningText();
+	if (WarningText.IsSet())
+	{
+		return WarningText;
+	}
+	FText ToolTip = GetDisplayTooltip();
+	if (!ToolTip.IsEmpty())
+	{
+		WarningText.Emplace(ToolTip);
+	}
+	return WarningText;
 }
 
 EGitState::Type FGitSourceControlState::GetGitState() const
