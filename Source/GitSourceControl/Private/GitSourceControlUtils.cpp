@@ -1544,8 +1544,6 @@ bool RefreshLocks(const TArray<FString>& FilesToRefresh, const FString& InReposi
 				}
 			}
 
-			const FString& LfsUserName = FGitSourceControlModule::Get().GetProvider().GetLockUser();
-
 			for (const FString& Result : Results)
 			{
 				FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
