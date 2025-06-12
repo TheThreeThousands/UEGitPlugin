@@ -2155,12 +2155,14 @@ bool UpdateCachedStates(const TMap<const FString, FGitState>& InResults)
 			{
 				continue;
 			}
+
 			// Git LFS default behavior is to mark all lockable files which aren't locked by the current user as read-only
 			// This happens in the LFS post-checkout hook script, which makes our 'mark writable' and 'added' files revert to readonly
 			if (NewState.FileState == EFileState::Added || NewState.FileState == EFileState::Modified)
 			{
 				FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*State->GetFilename(), false);
 			}
+
 			State->State.FileState = NewState.FileState;
 		}
 		if (NewState.TreeState != ETreeState::Unset)
