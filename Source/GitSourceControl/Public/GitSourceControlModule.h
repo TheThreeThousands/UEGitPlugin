@@ -98,7 +98,7 @@ public:
 		return GitSourceControlProvider;
 	}
 
-	const FGitSourceControlProvider& GetProvider() const
+	GITSOURCECONTROL_API const FGitSourceControlProvider& GetProvider() const
 	{
 		return GitSourceControlProvider;
 	}
