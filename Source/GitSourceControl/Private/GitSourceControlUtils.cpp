@@ -43,6 +43,10 @@
 #include "Async/Async.h"
 #include "UObject/Linker.h"
 
+#include "SourceControlHelpers.h"
+#include "SourceControlOperations.h"
+#include "SourceControlWindows.h"
+
 #include "Algo/Count.h"
 
 #ifndef GIT_DEBUG_STATUS
@@ -2497,6 +2501,106 @@ TSharedPtr<ISourceControlRevision, ESPMode::ThreadSafe> GetOriginRevisionOnBranc
 
 	return nullptr;
 }
+
+void SyncAssetsFromBranch(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FAssetData>& SelectedAssets, const FString& BranchName)
+{
+	TArray<FString> FilesToDiff;
+
+	for (const FAssetData& AssetData : SelectedAssets)
+	{
+		FString AbsoluteFilePath = SourceControlHelpers::PackageFilename(AssetData.PackageName.ToString());		
+		FilesToDiff.Add(AbsoluteFilePath);
+	}
+
+	TArray<FString> DiffResults;
+	TArray<FString> ErrorMessages;
+	TArray<FString> DiffParametersLog{ TEXT("--pretty="), TEXT("--name-only"), FString::Printf(TEXT("HEAD..%s"), *BranchName), TEXT(""), TEXT("--") };
+	RunCommand(TEXT("diff"), InPathToGitBinary, InRepositoryRoot, DiffParametersLog, FilesToDiff, DiffResults, ErrorMessages);
+
+	// DiffResults is repo relative and we need to be
+	// in absolute so we can compare against FilesToSync
+	AbsoluteFilenames(InRepositoryRoot, DiffResults);
+
+	const TArray<FString> FilesToSync = DiffResults;
+
+	if (!FilesToSync.IsEmpty())
+	{
+		// Source control checkout is lock the file and mark for read.
+		FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
+		if (!GitSourceControl)
+		{
+			return;
+		}
+		FGitSourceControlProvider& Provider = GitSourceControl->GetProvider();
+
+		TArray<FString> FilesToLock;
+		TArray<FString> UneditableAssets;
+
+		TArray<TSharedRef<ISourceControlState, ESPMode::ThreadSafe>> OutStates;
+		Provider.GetState(FilesToSync, OutStates, EStateCacheUsage::ForceUpdate);
+
+		FString FilePath;
+		for (const auto& SourceControlState : OutStates)
+		{
+			FilePath = SourceControlState->GetFilename();
+			if (SourceControlState->CanCheckout())
+			{
+				FilesToLock.Add(FilePath);
+			}
+			else if (!SourceControlState->IsCheckedOut())
+			{
+				UE_LOG(LogSourceControl, Warning, TEXT("File %s is not checked out, and cannot be checked out - failed to sync."), *FilePath);
+				UneditableAssets.Add(FilePath);
+			}
+		}
+
+		if (UneditableAssets.Num() != 0)
+		{
+			FString JoinedFiles = FString::Join(UneditableAssets, TEXT("\n"));
+			FMessageDialog::Open(EAppMsgCategory::Error, EAppMsgType::Ok, FText::Format(LOCTEXT("FailedBranchSync", "Failed to sync file from branch {0} because the following files cannot be checked out \n{1}"), { FText::FromString(BranchName), FText::FromString(JoinedFiles) }));
+			return;
+		}
+
+		Provider.Execute(ISourceControlOperation::Create<FCheckOut>(), FilesToLock);
+
+		const bool bOperationSuccess = USourceControlHelpers::ApplyOperationAndReloadPackages(FilesToSync,
+			[&InPathToGitBinary, &InRepositoryRoot, &BranchName, &FilesToSync](const TArray<FString>&)
+		{
+			// "checkout" in the context of git will download the file whereas "checkout"
+			// in the context of Unreal Engine/Perforce will add a lock and make it writable
+			TArray<FString> Results;
+			TArray<FString> Errors;
+			const FString GitCommand = TEXT("checkout");
+			bool bCommandSuccess = RunCommand(GitCommand, InPathToGitBinary, InRepositoryRoot, { BranchName, TEXT("--") }, FilesToSync, Results, Errors);
+
+			if (!bCommandSuccess)
+			{
+				UE_LOG(LogSourceControl, Error, TEXT("Git command %s failed"), *GitCommand);
+				for (const auto& Error : Errors)
+				{
+					UE_LOG(LogSourceControl, Error, TEXT("%s"), *Error);
+				}
+			}
+			return bCommandSuccess;
+		});
+
+		if (bOperationSuccess)
+		{
+			FText Message = FText::Format(LOCTEXT("SyncAssetsFromBranchSuccess", "Successfully reverted file(s) to match {0}"), FText::FromString(BranchName));
+			FMessageDialog::Open(EAppMsgCategory::Success, EAppMsgType::Ok, Message);
+		}
+		else
+		{
+			const FText Message = LOCTEXT("SyncAssetsFromBranchFailedGitCheckout", "Revert To Status Branch failed - git checkout failed. See the log for details and carefully review all files");
+			FMessageDialog::Open(EAppMsgCategory::Error, EAppMsgType::Ok, Message);
+		}
+	}
+	else
+	{
+		FMessageDialog::Open(EAppMsgCategory::Info, EAppMsgType::Ok, LOCTEXT("SyncAssetsFromBranchAssetsUnchanged", "Failed to sync files because the selected file(s) were unchanged"));
+	}
+}
+
 
 } // namespace GitSourceControlUtils
 
