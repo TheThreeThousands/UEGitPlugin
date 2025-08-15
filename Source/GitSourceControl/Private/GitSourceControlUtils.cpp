@@ -2586,7 +2586,7 @@ void SyncAssetsFromBranch(const FString& InPathToGitBinary, const FString& InRep
 
 		if (bOperationSuccess)
 		{
-			FText Message = FText::Format(LOCTEXT("SyncAssetsFromBranchSuccess", "Successfully reverted file(s) to match {0}"), FText::FromString(BranchName));
+			const FText Message = FText::Format(LOCTEXT("SyncAssetsFromBranchSuccess", "Successfully reverted file(s) locally to match status branch: {0}\n\nThis change has not be committed."), FText::FromString(BranchName));
 			FMessageDialog::Open(EAppMsgCategory::Success, EAppMsgType::Ok, Message);
 		}
 		else
@@ -2597,7 +2597,8 @@ void SyncAssetsFromBranch(const FString& InPathToGitBinary, const FString& InRep
 	}
 	else
 	{
-		FMessageDialog::Open(EAppMsgCategory::Info, EAppMsgType::Ok, LOCTEXT("SyncAssetsFromBranchAssetsUnchanged", "Failed to sync files because the selected file(s) were unchanged"));
+		const FText Message = FText::Format(LOCTEXT("SyncAssetsFromBranchAssetsUnchanged", "The selected file(s) were unchanged because the local file matches status branch: {0}"), FText::FromString(BranchName));
+		FMessageDialog::Open(EAppMsgCategory::Info, EAppMsgType::Ok, Message);
 	}
 }
 
