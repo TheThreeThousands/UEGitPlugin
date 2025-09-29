@@ -402,6 +402,13 @@ FString FindGitBinaryPath()
 		bFound = CheckGitAvailability(GitBinaryPath);
 	}
 
+	// 2.1) else apple silicon brew stores git in different place
+	if (!bFound)
+	{
+		GitBinaryPath = TEXT("/opt/homebrew/bin/git");
+		bFound = CheckGitAvailability(GitBinaryPath);
+	}
+
 	// 3) Else, look for the version of git provided by MacPorts
 	if (!bFound)
 	{
