@@ -782,7 +782,7 @@ bool GetRemoteUrl(const FString& InPathToGitBinary, const FString& InRepositoryR
 	return bResults;
 }
 
-const TArray<FString>& GetImportantGitPaths()
+TArray<FString> GetImportantGitPaths()
 {
 	return
 	{

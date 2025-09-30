@@ -170,7 +170,8 @@ bool GetCommitInfo(const FString& InPathToGitBinary, const FString& InRepository
  */
 bool GetRemoteUrl(const FString& InPathToGitBinary, const FString& InRepositoryRoot, FString& OutRemoteUrl);
 
-static const TArray<FString>& GetImportantGitPaths();
+// A list of core folder and file paths that we will always check locks, status, etc on startup 
+TArray<FString> GetImportantGitPaths();
 
 /**
  * Run a Git command - output is a string TArray.
