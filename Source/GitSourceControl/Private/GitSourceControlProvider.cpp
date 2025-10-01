@@ -172,9 +172,9 @@ void FGitSourceControlProvider::CheckRepositoryStatus()
 					UE_LOG(LogSourceControl, Log, TEXT("Git LFS Locking is enabled."));
 				}
 			}
-			const TArray<FString> ProjectDirs{FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),
-											  FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
-											  FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath())};
+
+			const TArray<FString> ProjectDirs = GitSourceControlUtils::GetSourceControlledAssetPaths();
+
 			TArray<FString> StatusErrorMessages;
 			if (!GitSourceControlUtils::RunUpdateStatus(PathToGitBinary, PathToRepositoryRoot, bUsingGitLfsLocking, ProjectDirs, StatusErrorMessages, States))
 			{

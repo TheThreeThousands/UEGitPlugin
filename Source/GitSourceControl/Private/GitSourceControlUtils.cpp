@@ -782,6 +782,17 @@ bool GetRemoteUrl(const FString& InPathToGitBinary, const FString& InRepositoryR
 	return bResults;
 }
 
+TArray<FString> GetSourceControlledAssetPaths()
+{
+	return
+	{
+		FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),
+		FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
+		FPaths::ConvertRelativePathToFull(FPaths::ProjectPluginsDir()),
+		FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath())
+	};
+}
+
 bool RunCommand(const FString& InCommand, const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& InParameters,
 				const TArray<FString>& InFiles, TArray<FString>& OutResults, TArray<FString>& OutErrorMessages)
 {
@@ -1376,12 +1387,22 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 
 	TMap<FString, FString> NewerFiles;
 
+	const FString AbsoluteProjectPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+	const FString AbsolutePluginsPath = FPaths::Combine(AbsoluteProjectPath, "Plugins/");
+	const FString AbsoluteBinariesPath = FPaths::Combine(AbsoluteProjectPath, "Binaries/");
 
 	//const TArray<FString>& RelativeFiles = RelativeFilenames(Files, InRepositoryRoot);
-	// Get the full remote status of the Content folder, since it's the only lockable folder we track in editor. 
+	// Get the full remote status of the Content and Plugins folder, since it's the only lockable folder we track in editor. 
 	// This shows any new files as well.
 	// Also update the status of `.checksum`.
-	TArray<FString> FilesToDiff{FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()), ".checksum", "Binaries/", "Plugins/"};
+	TArray<FString> FilesToDiff
+	{
+		FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),
+		".checksum",
+		AbsoluteBinariesPath,
+		AbsolutePluginsPath,
+	};
+	
 	TArray<FString> ParametersLog{TEXT("--pretty="), TEXT("--name-only") };
 	for (auto& Branch : BranchesToDiff)
 	{
@@ -1438,18 +1459,20 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 
 			for (const FString& NewerFileName : Intersection)
 			{
+				const FString& NewerFilePath = FPaths::ConvertRelativePathToFull(InRepositoryRoot, NewerFileName);
+
 				// Don't care about mergeable files (.collection, .ini, .uproject, etc)
 				if (!IsFileLFSLockable(NewerFileName))
 				{
 					// Check if there's newer binaries pending on this branch
-					if (bCurrentBranch && (NewerFileName == TEXT(".checksum") || NewerFileName.StartsWith("Binaries/", ESearchCase::IgnoreCase) ||
-						NewerFileName.StartsWith("Plugins/", ESearchCase::IgnoreCase)))
+					if (bCurrentBranch && (NewerFileName == TEXT(".checksum") || NewerFilePath.StartsWith(AbsoluteBinariesPath, ESearchCase::IgnoreCase) ||
+						NewerFilePath.StartsWith(AbsolutePluginsPath, ESearchCase::IgnoreCase)))
 					{
 						Provider.bPendingRestart = true;
 					}
 					continue;
 				}
-				const FString& NewerFilePath = FPaths::ConvertRelativePathToFull(InRepositoryRoot, NewerFileName);
+
 				if (bCurrentBranch || !NewerFiles.Contains(NewerFilePath))
 				{
 					NewerFiles.Add(NewerFilePath, Branch);
