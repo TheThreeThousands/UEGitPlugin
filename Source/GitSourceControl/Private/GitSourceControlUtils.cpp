@@ -1387,23 +1387,24 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 
 	TMap<FString, FString> NewerFiles;
 
-	const FString AbsoluteProjectPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
-	const FString AbsolutePluginsPath = FPaths::Combine(AbsoluteProjectPath, "Plugins/");
-	const FString AbsoluteBinariesPath = FPaths::Combine(AbsoluteProjectPath, "Binaries/");
+	const FString AbsoluteProjectDirPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+	const FString AbsolutePluginsDirPath = FPaths::Combine(AbsoluteProjectDirPath, "Plugins/");
+	const FString AbsoluteBinariesDirPath = FPaths::Combine(AbsoluteProjectDirPath, "Binaries/");
+	const FString AbsoluteChecksumFilePath = FPaths::Combine(AbsoluteProjectDirPath, ".checksum");
 
 	//const TArray<FString>& RelativeFiles = RelativeFilenames(Files, InRepositoryRoot);
 	// Get the full remote status of the Content and Plugins folder, since it's the only lockable folder we track in editor. 
 	// This shows any new files as well.
 	// Also update the status of `.checksum`.
-	TArray<FString> FilesToDiff
+	const TArray<FString> FilesToDiff
 	{
 		FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),
-		".checksum",
-		AbsoluteBinariesPath,
-		AbsolutePluginsPath,
+		AbsoluteChecksumFilePath,
+		AbsoluteBinariesDirPath,
+		AbsolutePluginsDirPath,
 	};
 	
-	TArray<FString> ParametersLog{TEXT("--pretty="), TEXT("--name-only") };
+	TArray<FString> ParametersLog{TEXT("--pretty="), TEXT("--name-only"), TEXT(""), TEXT("--")};
 	for (auto& Branch : BranchesToDiff)
 	{
 		ParametersLog.Add(FString::Printf(TEXT("%s"), *Branch));
@@ -1465,8 +1466,8 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 				if (!IsFileLFSLockable(NewerFileName))
 				{
 					// Check if there's newer binaries pending on this branch
-					if (bCurrentBranch && (NewerFileName == TEXT(".checksum") || NewerFilePath.StartsWith(AbsoluteBinariesPath, ESearchCase::IgnoreCase) ||
-						NewerFilePath.StartsWith(AbsolutePluginsPath, ESearchCase::IgnoreCase)))
+					if (bCurrentBranch && (NewerFilePath == AbsoluteChecksumFilePath || NewerFilePath.StartsWith(AbsoluteBinariesDirPath, ESearchCase::IgnoreCase) ||
+						NewerFilePath.StartsWith(AbsolutePluginsDirPath, ESearchCase::IgnoreCase)))
 					{
 						Provider.bPendingRestart = true;
 					}
