@@ -538,19 +538,21 @@ void FGitSourceControlMenu::AddMenuExtension(FToolMenuSection& Builder)
 void FGitSourceControlMenu::AddMenuExtension(FMenuBuilder& Builder)
 #endif
 {
-#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 6
-	// UE 5.6 removed the submit content button, so re-create one here
-	Builder.AddMenuEntry(
-		"CommitAndPush",
-		LOCTEXT("GitCommit",				"Submit Content"),
-		LOCTEXT("GitPushTooltip",		"Opens a dialog with check in options for content and levels."),
-		FSlateIcon(FAppStyle::GetAppStyleSetName(), "SourceControl.Actions.Submit"),
-		FUIAction(
-			FExecuteAction::CreateRaw(this, &FGitSourceControlMenu::CommitClicked),
-			FCanExecuteAction::CreateRaw(this, &FGitSourceControlMenu::CanCommit)
-		)
-	);
-#endif
+	// [DIVERGENCE]	TECH-296 Disable the "View Changes" button from Source Control menu
+// #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 6
+// 	// UE 5.6 removed the submit content button, so re-create one here
+// 	Builder.AddMenuEntry(
+// 		"CommitAndPush",
+// 		LOCTEXT("GitCommit",				"Submit Content"),
+// 		LOCTEXT("GitPushTooltip",		"Opens a dialog with check in options for content and levels."),
+// 		FSlateIcon(FAppStyle::GetAppStyleSetName(), "SourceControl.Actions.Submit"),
+// 		FUIAction(
+// 			FExecuteAction::CreateRaw(this, &FGitSourceControlMenu::CommitClicked),
+// 			FCanExecuteAction::CreateRaw(this, &FGitSourceControlMenu::CanCommit)
+// 		)
+// 	);
+// #endif
+	// [END DIVERGENCE]
 	
 	Builder.AddMenuEntry(
 #if ENGINE_MAJOR_VERSION >= 5

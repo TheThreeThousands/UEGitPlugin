@@ -564,7 +564,10 @@ bool FGitSourceControlProvider::UsesLocalReadOnlyState() const
 
 bool FGitSourceControlProvider::UsesChangelists() const
 {
-	return true;
+	// [DIVERGENCE]	TECH-296 Disable the "View Changes" button from Source Control menu
+	//return true;
+	return false;
+	// [END DIVERGENCE]
 }
 
 bool FGitSourceControlProvider::UsesCheckout() const
@@ -597,7 +600,10 @@ bool FGitSourceControlProvider::AllowsDiffAgainstDepot() const
 
 bool FGitSourceControlProvider::UsesUncontrolledChangelists() const
 {
-	return true;
+	// [DIVERGENCE]	TECH-296 Disable the "View Changes" button from Source Control menu
+	//return true;
+	return false;
+	// [END DIVERGENCE]
 }
 
 bool FGitSourceControlProvider::UsesSnapshots() const
