@@ -583,7 +583,18 @@ bool FGitSourceControlProvider::UsesFileRevisions() const
 
 TOptional<bool> FGitSourceControlProvider::IsAtLatestRevision() const
 {
-	return TOptional<bool>();
+	TArray<FString> ErrorMessages;
+	int NumRevisionsBehind = 0;
+	const bool bSuccess = GitSourceControlUtils::GetNumRevisionsBehindOrigin(PathToGitBinary, PathToRepositoryRoot, NumRevisionsBehind, ErrorMessages);
+	
+	if (bSuccess)
+	{
+		return TOptional<bool>(NumRevisionsBehind == 0);
+	}
+	else
+	{
+		return TOptional<bool>();
+	}
 }
 
 TOptional<int> FGitSourceControlProvider::GetNumLocalChanges() const
