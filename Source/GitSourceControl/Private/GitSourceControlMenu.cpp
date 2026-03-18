@@ -256,8 +256,10 @@ void FGitSourceControlMenu::CommitClicked()
 	const TOptional<bool> bAtLatestRevision = SourceControlProvider.IsAtLatestRevision();
 	if (bAtLatestRevision.IsSet() && !bAtLatestRevision.GetValue())
 	{
-		const FText InfoMessage = FText::FromString(TEXT("Your local repository is not at the latest revision. You will need to close the editor and pull before you can submit your changes."));
-		const EAppReturnType::Type Selection = FMessageDialog::Open(EAppMsgCategory::Warning, EAppMsgType::YesNo, InfoMessage);
+		static const FText Message = FText::FromString(TEXT("Your local repository is not at the latest revision. "
+			"You will need to close the editor and pull before you can submit your changes."
+			"\n\nOpen submission window anyway?"));
+		const EAppReturnType::Type Selection = FMessageDialog::Open(EAppMsgCategory::Warning, EAppMsgType::YesNo, Message);
 
 		switch (Selection)
 		{
