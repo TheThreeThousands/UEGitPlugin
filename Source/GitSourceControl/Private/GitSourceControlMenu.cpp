@@ -251,7 +251,34 @@ void FGitSourceControlMenu::CommitClicked()
 	}
 	
 	FLevelEditorModule & LevelEditorModule = FModuleManager::Get().LoadModuleChecked<FLevelEditorModule>("LevelEditor");
-	FSourceControlWindows::ChoosePackagesToCheckIn(nullptr);
+	
+	ISourceControlProvider& SourceControlProvider = ISourceControlModule::Get().GetProvider();
+	const TOptional<bool> bAtLatestRevision = SourceControlProvider.IsAtLatestRevision();
+	if (bAtLatestRevision.IsSet() && !bAtLatestRevision.GetValue())
+	{
+		const FText InfoMessage = FText::FromString(TEXT("Your local repository is not at the latest revision. You will need to close the editor and pull before you can submit your changes."));
+		const EAppReturnType::Type Selection = FMessageDialog::Open(EAppMsgCategory::Warning, EAppMsgType::YesNo, InfoMessage);
+
+		switch (Selection)
+		{
+		case EAppReturnType::Yes:
+			{
+				FSourceControlWindows::ChoosePackagesToCheckIn();
+			}
+			break;
+		case EAppReturnType::No:
+			[[fallthrough]];
+		case EAppReturnType::Cancel:
+			// Do nothing
+			break;
+		default:
+			checkf(false, TEXT("Unexpected selection from not at latest revision dialog"));
+		}
+	}
+	else
+	{
+		FSourceControlWindows::ChoosePackagesToCheckIn();
+	}
 }
 
 void FGitSourceControlMenu::PushClicked()
@@ -538,22 +565,17 @@ void FGitSourceControlMenu::AddMenuExtension(FToolMenuSection& Builder)
 void FGitSourceControlMenu::AddMenuExtension(FMenuBuilder& Builder)
 #endif
 {
-	// UE 5.6 doesn't show the Submit Content button if changelists are enabled
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 6
-	const FGitSourceControlProvider& Provider = FGitSourceControlModule::Get().GetProvider();
-	if (Provider.UsesChangelists())
-	{
-		Builder.AddMenuEntry(
-			"CommitAndPush",
-			LOCTEXT("GitCommit",				"Submit Content"),
-			LOCTEXT("GitPushTooltip",		"Opens a dialog with check in options for content and levels."),
-			FSlateIcon(FAppStyle::GetAppStyleSetName(), "SourceControl.Actions.Submit"),
-			FUIAction(
-				FExecuteAction::CreateRaw(this, &FGitSourceControlMenu::CommitClicked),
-				FCanExecuteAction::CreateRaw(this, &FGitSourceControlMenu::CanCommit)
-			)
-		);
-	}
+	Builder.AddMenuEntry(
+		"CommitAndPush",
+		LOCTEXT("GitCommit",				"Submit Content"),
+		LOCTEXT("GitPushTooltip",		"Opens a dialog with check in options for content and levels."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "SourceControl.Actions.Submit"),
+		FUIAction(
+			FExecuteAction::CreateRaw(this, &FGitSourceControlMenu::CommitClicked),
+			FCanExecuteAction::CreateRaw(this, &FGitSourceControlMenu::CanCommit)
+		)
+	);
 #endif
 	
 	Builder.AddMenuEntry(
