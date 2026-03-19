@@ -265,7 +265,7 @@ void FGitSourceControlMenu::CommitClicked()
 		{
 		case EAppReturnType::Yes:
 			{
-				FSourceControlWindows::ChoosePackagesToCheckIn();
+				FSourceControlWindows::ChoosePackagesToCheckIn(nullptr);
 			}
 			break;
 		case EAppReturnType::No:
@@ -279,7 +279,7 @@ void FGitSourceControlMenu::CommitClicked()
 	}
 	else
 	{
-		FSourceControlWindows::ChoosePackagesToCheckIn();
+		FSourceControlWindows::ChoosePackagesToCheckIn(nullptr);
 	}
 }
 
