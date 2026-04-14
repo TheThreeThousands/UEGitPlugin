@@ -784,12 +784,15 @@ bool GetRemoteUrl(const FString& InPathToGitBinary, const FString& InRepositoryR
 
 TArray<FString> GetSourceControlledAssetPaths()
 {
+	const FString AbsoluteProjectDirPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
 	return
 	{
 		FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),
 		FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
 		FPaths::ConvertRelativePathToFull(FPaths::ProjectPluginsDir()),
-		FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath())
+		FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath()),
+		FPaths::Combine(AbsoluteProjectDirPath, TEXT("Binaries/")),
+		FPaths::Combine(AbsoluteProjectDirPath, TEXT(".checksum"))
 	};
 }
 
@@ -1392,18 +1395,6 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	const FString AbsoluteBinariesDirPath = FPaths::Combine(AbsoluteProjectDirPath, "Binaries/");
 	const FString AbsoluteChecksumFilePath = FPaths::Combine(AbsoluteProjectDirPath, ".checksum");
 
-	//const TArray<FString>& RelativeFiles = RelativeFilenames(Files, InRepositoryRoot);
-	// Get the full remote status of the Content and Plugins folder, since it's the only lockable folder we track in editor. 
-	// This shows any new files as well.
-	// Also update the status of `.checksum`.
-	const TArray<FString> FilesToDiff
-	{
-		FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),
-		AbsoluteChecksumFilePath,
-		AbsoluteBinariesDirPath,
-		AbsolutePluginsDirPath,
-	};
-	
 	TArray<FString> ParametersLog{TEXT("--pretty="), TEXT("--name-only"), TEXT(""), TEXT("--")};
 	for (auto& Branch : BranchesToDiff)
 	{
@@ -1415,7 +1406,7 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	bool bResultLog = false;
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE_TEXT("GitSourceControlUtils::CheckRemote Log %s");
-		bResultLog = RunCommand(TEXT("log"), InPathToGitBinary, InRepositoryRoot, ParametersLog, FilesToDiff, LogResults, ErrorMessages);
+		bResultLog = RunCommand(TEXT("log"), InPathToGitBinary, InRepositoryRoot, ParametersLog, Files, LogResults, ErrorMessages);
 	}	
 
 	for (auto& Branch : BranchesToDiff)
@@ -1444,7 +1435,7 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 				{
 					TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*FString::Printf(TEXT("GitSourceControlUtils::CheckRemote diff %s"), *Branch));
 					TArray<FString> DiffParametersLog{ TEXT("--pretty="), TEXT("--name-only"), FString::Printf(TEXT("...%s"), *Branch), TEXT(""), TEXT("--") };
-					RunCommand(TEXT("diff"), InPathToGitBinary, InRepositoryRoot, DiffParametersLog, FilesToDiff, DiffResults, ErrorMessages);
+					RunCommand(TEXT("diff"), InPathToGitBinary, InRepositoryRoot, DiffParametersLog, Files, DiffResults, ErrorMessages);
 				}
 				
 				{
