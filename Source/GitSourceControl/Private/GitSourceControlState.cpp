@@ -13,6 +13,7 @@
 #endif
 
 #include "HAL/PlatformFileManager.h"
+#include "GenericPlatform/GenericPlatformFile.h"
 
 #define LOCTEXT_NAMESPACE "GitSourceControl.State"
 
