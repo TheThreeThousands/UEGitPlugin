@@ -28,6 +28,7 @@
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Runtime/Launch/Resources/Version.h"
+#include "Misc/MessageDialog.h"
 
 #define LOCTEXT_NAMESPACE "GitSourceControl"
 
