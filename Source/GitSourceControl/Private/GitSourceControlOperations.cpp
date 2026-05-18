@@ -563,7 +563,7 @@ void GroupFileCommandsForRevert(const TArray<FString>& InFiles, TArray<FString>&
 		{
 			FilesToCheckout.Add(State->GetFilename());
 		}
-		else if (State->IsIgnored())
+		else if (State->IsIgnored() || State->IsCurrent())
 		{
 			IgnoredFiles.Add(State->GetFilename());
 		}
