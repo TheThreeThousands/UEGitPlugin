@@ -527,7 +527,7 @@ bool FGitDeleteWorker::Execute(FGitSourceControlCommand& InCommand)
 	return InCommand.bCommandSuccessful;
 }
 
-void GroupFileCommandsForRevert(const TArray<FString>& InFiles, TArray<FString>& FilesToRemove, TArray<FString>& FilesToCheckout, TArray<FString>& FilesToReset, TArray<FString>& FilesToDelete)
+void GroupFileCommandsForRevert(const TArray<FString>& InFiles, TArray<FString>& FilesToRemove, TArray<FString>& FilesToCheckout, TArray<FString>& FilesToReset, TArray<FString>& IgnoredFiles, TArray<FString>& FilesToDelete)
 {
 	FGitSourceControlModule& GitSourceControl = FGitSourceControlModule::Get();
 	FGitSourceControlProvider& Provider = GitSourceControl.GetProvider();
@@ -563,6 +563,10 @@ void GroupFileCommandsForRevert(const TArray<FString>& InFiles, TArray<FString>&
 		{
 			FilesToCheckout.Add(State->GetFilename());
 		}
+		else if (State->IsIgnored())
+		{
+			IgnoredFiles.Add(State->GetFilename());
+		}
 	}
 }
 
@@ -595,11 +599,12 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 		TArray<FString> FilesToRemove;
 		TArray<FString> FilesToCheckout;
 		TArray<FString> FilesToReset;
+		TArray<FString> IgnoredFiles;
 		TArray<FString> FilesToDelete;
-		GroupFileCommandsForRevert(InCommand.Files, FilesToRemove, FilesToCheckout, FilesToReset, FilesToDelete);
+		GroupFileCommandsForRevert(InCommand.Files, FilesToRemove, FilesToCheckout, FilesToReset, IgnoredFiles, FilesToDelete);
 
 		// Verify we haven't missed performing an operation on any file passed on for revert
-		ensure(FilesToRemove.Num() + FilesToCheckout.Num() + FilesToReset.Num() == InCommand.Files.Num());
+		ensure(FilesToRemove.Num() + FilesToCheckout.Num() + FilesToReset.Num() + IgnoredFiles.Num() == InCommand.Files.Num());
 
 		for (const FString& FileName : FilesToDelete)
 		{
