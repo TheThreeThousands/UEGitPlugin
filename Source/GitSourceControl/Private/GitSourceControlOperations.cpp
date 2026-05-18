@@ -602,7 +602,15 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 		TArray<FString> IgnoredFiles;
 		TArray<FString> FilesToDelete;
 		GroupFileCommandsForRevert(InCommand.Files, FilesToRemove, FilesToCheckout, FilesToReset, IgnoredFiles, FilesToDelete);
-
+		
+		UE_LOG(LogSourceControl, Display, TEXT("Files to revert: Count [%i] %s"), InCommand.Files.Num(), FString::Join(InCommand.Files, TEXT("\n")));
+		
+		UE_LOG(LogSourceControl, Display, TEXT("Files to Checkout (Git checkout, not UE lock): Count [%i] %s"), FilesToCheckout.Num(), FString::Join(FilesToCheckout, TEXT("\n")));
+		UE_LOG(LogSourceControl, Display, TEXT("Files to Reset: Count [%i] %s"), FilesToReset.Num(), FString::Join(FilesToReset, TEXT("\n")));
+		UE_LOG(LogSourceControl, Display, TEXT("Files to Remove: Count [%i] %s"), FilesToRemove.Num(), FString::Join(FilesToRemove, TEXT("\n")));
+		UE_LOG(LogSourceControl, Display, TEXT("Ignored files: Count [%i] %s"), IgnoredFiles.Num(), FString::Join(IgnoredFiles, TEXT("\n")));
+		
+		
 		// Verify we haven't missed performing an operation on any file passed on for revert
 		ensure(FilesToRemove.Num() + FilesToCheckout.Num() + FilesToReset.Num() + IgnoredFiles.Num() == InCommand.Files.Num());
 
