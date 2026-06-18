@@ -1361,9 +1361,6 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 		return;
 	}
 	FGitSourceControlProvider& Provider = GitSourceControl->GetProvider();
-	const TArray<FString> StatusBranches = Provider.GetStatusBranchNames();
-
-	TSet<FString> BranchesToDiff{ StatusBranches };
 
 	bool bDiffAgainstRemoteCurrent = false;
 
@@ -1373,8 +1370,34 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	{
 		// We have a valid remote, so diff against it.
 		bDiffAgainstRemoteCurrent = true;
-		// Ensure that the remote branch is in there.
+	}
+
+	// Determine the current branch's position in the status branch hierarchy.
+	// Index 0 = most stable (e.g. release branches). Higher indices = less stable (e.g. feature branches).
+	// Multiple concrete branches can share a hierarchy level via wildcard patterns.
+	// If the current branch does not match any pattern it is a non-status branch and we
+	// include all status branches in the diff (we cannot determine what is "1 above" it).
+	const int32 CurrentBranchHierarchyIndex = Provider.GetStatusBranchHierarchyIndex(CurrentBranchName);
+	const bool bCurrentBranchIsStatusBranch = CurrentBranchHierarchyIndex != INDEX_NONE;
+
+	// Build the diff set: always include the current branch's remote (for NotAtHead detection).
+	// For status branches, only include those at the same hierarchy level or 1 level more stable (index - 1).
+	// Branches further away are too removed to surface as a relevant blocking state.
+	TSet<FString> BranchesToDiff;
+	if (bDiffAgainstRemoteCurrent)
+	{
 		BranchesToDiff.Add(CurrentBranchName);
+	}
+	
+	if (!bCurrentBranchIsStatusBranch)
+    {
+    	// Cannot determine the relative position of a non-status branch, so include all status branches.
+    	BranchesToDiff.Add(Provider.GetStatusBranchNames());
+    }
+	else
+	{
+		Provider.GetStatusBranchesAtHierarchyIndex(CurrentBranchHierarchyIndex, BranchesToDiff);
+		Provider.GetStatusBranchesAtHierarchyIndex(CurrentBranchHierarchyIndex-1, BranchesToDiff);
 	}
 
 	if (!BranchesToDiff.Num())
@@ -1428,7 +1451,7 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 			// Status Branches may not be initialized because they're not in use by the project. They can also be not initilaized in some other quirky circumstances
 			// eg. When running multi client / dedicated server in editor without running them under the same process, those game instances will run as an editor instance
 			// which means editor plugins are enabled and running, but they don't run UnrealEdEngine, so the status branches are not initialized.
-			if (StatusBranches.Num() > 0)
+			if (BranchesToDiff.Num() > 1)
 			{
 				// Check if the files state in the branch in which is changed is actually different from compared branch
 				// This opens files for edit if they were modified in another branch but have since been reverted back to state in status.
@@ -1475,6 +1498,8 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 		Intersection.Reset();
 	}
 
+	int CurrentBranchStateIndex = Provider.GetStateBranchIndex(CurrentBranchName);
+	
 	for (const auto& NewFile : NewerFiles)
 	{
 		if (FGitSourceControlState* FileState = OutStates.Find(NewFile.Key))
