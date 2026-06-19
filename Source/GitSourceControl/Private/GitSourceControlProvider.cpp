@@ -901,68 +901,102 @@ void FGitSourceControlProvider::RegisterStateBranches(const TArray<FString>& Bra
 	StatusBranchNamePatternsInternal = BranchNames;
 }
 
+void FGitSourceControlProvider::GetStatusBranchesAtHierarchyIndex(int32 HierarchyIndex, TSet<FString>& OutBranches) const
+{
+	if (!StatusBranchNamePatternsInternal.IsValidIndex(HierarchyIndex))
+	{
+		return;
+	}
+
+	TArray<FString> Matches;
+	GitSourceControlUtils::GetRemoteBranchesWildcard(PathToGitBinary, PathToRepositoryRoot, StatusBranchNamePatternsInternal[HierarchyIndex], Matches);
+	for (const FString& Match : Matches)
+	{
+		FString Trimmed = Match.TrimStartAndEnd();
+		// Higher index wildcard matches could be broad 'catch all' type matches, and can include branches from lower states
+		// filter out any branches which would be matched by a lower index
+		if (GetStateBranchIndex(Trimmed) != HierarchyIndex)
+		{
+			continue;
+		}
+		// Git branch --remotes can return a synthetic "origin/HEAD -> origin/main" entry — skip it.
+		if (!Trimmed.StartsWith("origin/HEAD"))
+		{
+			OutBranches.Add(Trimmed);
+		}
+	}
+}
+
+int32 FGitSourceControlProvider::GetStatusBranchHierarchyIndex(const FString& BranchNameToCheck) const
+{
+	// Each entry in StatusBranchNamePatternsInternal is a wildcard pattern representing one level of the branch hierarchy.
+	// Pattern 0 = most stable (e.g. release branches), higher indices = less stable (e.g. feature branches).
+	// We return the index of the first pattern that the branch name matches.
+	for (int32 i = 0; i < StatusBranchNamePatternsInternal.Num(); i++)
+	{
+		if (BranchNameToCheck.MatchesWildcard(StatusBranchNamePatternsInternal[i]))
+		{
+			return i;
+		}
+	}
+	return INDEX_NONE;
+}
+
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 7
 bool FGitSourceControlProvider::GetStateBranchAtIndex(int32 BranchIndex, FString& OutBranchName) const
 {
-	auto StatusBranchNames = GetStatusBranchNames();
-
-	if (BranchIndex >= 0 && BranchIndex < StatusBranchNames.Num())
+	TSet<FString> BranchNames;
+	GetStatusBranchesAtHierarchyIndex(BranchIndex, BranchNames);
+	if (BranchNames.Num() == 0)
 	{
-		OutBranchName = StatusBranchNames[BranchIndex];
-		return true;
+		return false;
 	}
-	return false;
+	
+	ensure(BranchNames.Num() == 1);
+	OutBranchName = *BranchNames.begin();
+	return true;
 }
 #endif
 
 int32 FGitSourceControlProvider::GetStateBranchIndex(const FString& StateBranchName) const
 {
-	// How do state branches indices work?
-	// Order matters. Lower values are lower in the hierarchy, i.e., changes from higher branches get automatically merged down.
-	// The higher branch is, the stabler it is, and has changes manually promoted up.
+	// How do state branch indices work?
+	// Index 0 = most stable (e.g. release branches). Higher indices = less stable (e.g. feature branches).
+	// Each entry in StatusBranchNamePatternsInternal is a wildcard pattern defining one level, so multiple
+	// concrete branches (e.g. origin/release/1.0 and origin/release/2.0) can share the same hierarchy level.
+	// Changes are promoted upward (toward lower indices) manually, and automatically merged down (toward higher indices).
 
-	// Check if we are checking the index of the current branch
 	// UE uses FEngineVersion for the current branch name because of UEGames setup, but we want to handle otherwise for Git repos.
-	auto StatusBranchNames = GetStatusBranchNames();
 	if (StateBranchName == FEngineVersion::Current().GetBranch())
 	{
-		const int32 CurrentBranchStatusIndex = StatusBranchNames.IndexOfByKey(BranchName);
-		const bool bCurrentBranchInStatusBranches = CurrentBranchStatusIndex != INDEX_NONE;
-		// If the user's current branch is tracked as a status branch, give the proper index
-		if (bCurrentBranchInStatusBranches)
+		const int32 CurrentBranchHierarchyIndex = GetStatusBranchHierarchyIndex(BranchName);
+		if (CurrentBranchHierarchyIndex != INDEX_NONE)
 		{
-			return CurrentBranchStatusIndex;
+			return CurrentBranchHierarchyIndex;
 		}
-		// If the current branch is not a status branch, make it the highest branch
-		// This is semantically correct, since if a branch is not marked as a status branch
-		// it merges changes in a similar fashion to the highest status branch, i.e. manually promotes them
-		// based on the user merging those changes in. and these changes always get merged from even the highest point
-		// of the stream. i.e, promoted/stable changes are always up for consumption by this branch.
+		// If the current branch is not a status branch, treat it as the highest branch.
+		// It merges changes in a similar fashion to the highest status branch — manually promoting them
+		// based on the user merging those changes in — and promoted/stable changes are always up for consumption.
 		return INT32_MAX;
 	}
 
-	// If we're not checking the current branch, then we don't need to do special handling.
-	// If it is not a status branch, there is no message
-	return StatusBranchNames.IndexOfByKey(StateBranchName);
+	return GetStatusBranchHierarchyIndex(StateBranchName);
 }
 
 TArray<FString> FGitSourceControlProvider::GetStatusBranchNames() const
 {
-	TArray<FString> StatusBranches;
-	if(PathToGitBinary.IsEmpty() || PathToRepositoryRoot.IsEmpty())
-		return StatusBranches;
-	
-	for (int i = 0; i < StatusBranchNamePatternsInternal.Num(); i++)
+	if (PathToGitBinary.IsEmpty() || PathToRepositoryRoot.IsEmpty())
 	{
-		TArray<FString> Matches;
-		bool bResult = GitSourceControlUtils::GetRemoteBranchesWildcard(PathToGitBinary, PathToRepositoryRoot, StatusBranchNamePatternsInternal[i], Matches);
-		Algo::Transform(Matches, StatusBranches, [](const FString& Branch) { return Branch.TrimStartAndEnd(); });
+		return {};
 	}
-	
-	// Git branch --remotes will return a branch in the format "origin/HEAD -> origin/main" in the list of branches...
-	StatusBranches.SetNum(Algo::RemoveIf(StatusBranches, [](const FString& Branch) { return Branch.StartsWith("origin/HEAD"); }));
 
-	return StatusBranches;
+	TSet<FString> BranchSet;
+	for (int32 i = 0; i < StatusBranchNamePatternsInternal.Num(); i++)
+	{
+		GetStatusBranchesAtHierarchyIndex(i, BranchSet);
+	}
+
+	return BranchSet.Array();
 }
 
 #undef LOCTEXT_NAMESPACE
