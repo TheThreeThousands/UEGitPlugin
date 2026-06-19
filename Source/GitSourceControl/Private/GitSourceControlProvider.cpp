@@ -913,6 +913,12 @@ void FGitSourceControlProvider::GetStatusBranchesAtHierarchyIndex(int32 Hierarch
 	for (const FString& Match : Matches)
 	{
 		FString Trimmed = Match.TrimStartAndEnd();
+		// Lower wildcard matches could be broad 'catch all' type matches, and can include branches from lower states
+		// ensure that the branches returned here are actually for our index.
+		if (GetStateBranchIndex(Trimmed) != HierarchyIndex)
+		{
+			continue;
+		}
 		// Git branch --remotes can return a synthetic "origin/HEAD -> origin/main" entry — skip it.
 		if (!Trimmed.StartsWith("origin/HEAD"))
 		{
@@ -939,16 +945,16 @@ int32 FGitSourceControlProvider::GetStatusBranchHierarchyIndex(const FString& Br
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 7
 bool FGitSourceControlProvider::GetStateBranchAtIndex(int32 BranchIndex, FString& OutBranchName) const
 {
-	// Return the first status branch that sits at the requested hierarchy level.
-	for (const FString& Branch : GetStatusBranchNames())
+	TSet<FString> BranchNames;
+	GetStatusBranchesAtHierarchyIndex(BranchIndex, BranchNames);
+	if (BranchNames.Num() == 0)
 	{
-		if (GetStatusBranchHierarchyIndex(Branch) == BranchIndex)
-		{
-			OutBranchName = Branch;
-			return true;
-		}
+		return false;
 	}
-	return false;
+	
+	ensure(BranchNames.Num() == 1);
+	OutBranchName = *BranchNames.begin();
+	return true;
 }
 #endif
 

@@ -1378,7 +1378,6 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	// If the current branch does not match any pattern it is a non-status branch and we
 	// include all status branches in the diff (we cannot determine what is "1 above" it).
 	const int32 CurrentBranchHierarchyIndex = Provider.GetStatusBranchHierarchyIndex(CurrentBranchName);
-	const bool bCurrentBranchIsStatusBranch = CurrentBranchHierarchyIndex != INDEX_NONE;
 
 	// Build the diff set: always include the current branch's remote (for NotAtHead detection).
 	// For status branches, only include those at the same hierarchy level or 1 level more stable (index - 1).
@@ -1389,16 +1388,10 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 		BranchesToDiff.Add(CurrentBranchName);
 	}
 	
-	if (!bCurrentBranchIsStatusBranch)
-    {
-    	// Cannot determine the relative position of a non-status branch, so include all status branches.
-    	BranchesToDiff.Add(Provider.GetStatusBranchNames());
-    }
-	else
-	{
-		Provider.GetStatusBranchesAtHierarchyIndex(CurrentBranchHierarchyIndex, BranchesToDiff);
-		Provider.GetStatusBranchesAtHierarchyIndex(CurrentBranchHierarchyIndex-1, BranchesToDiff);
-	}
+	// We only care about changes to branches at the same level as us, or one level up
+	// Our branches always merge up 1 index, and then automerge down.
+	Provider.GetStatusBranchesAtHierarchyIndex(CurrentBranchHierarchyIndex, BranchesToDiff);
+	Provider.GetStatusBranchesAtHierarchyIndex(CurrentBranchHierarchyIndex-1, BranchesToDiff);
 
 	if (!BranchesToDiff.Num())
 	{
@@ -1497,8 +1490,6 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 		DiffResults.Reset();
 		Intersection.Reset();
 	}
-
-	int CurrentBranchStateIndex = Provider.GetStateBranchIndex(CurrentBranchName);
 	
 	for (const auto& NewFile : NewerFiles)
 	{
