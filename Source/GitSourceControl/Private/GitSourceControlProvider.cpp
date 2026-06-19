@@ -913,8 +913,8 @@ void FGitSourceControlProvider::GetStatusBranchesAtHierarchyIndex(int32 Hierarch
 	for (const FString& Match : Matches)
 	{
 		FString Trimmed = Match.TrimStartAndEnd();
-		// Lower wildcard matches could be broad 'catch all' type matches, and can include branches from lower states
-		// ensure that the branches returned here are actually for our index.
+		// Higher index wildcard matches could be broad 'catch all' type matches, and can include branches from lower states
+		// filter out any branches which would be matched by a lower index
 		if (GetStateBranchIndex(Trimmed) != HierarchyIndex)
 		{
 			continue;
