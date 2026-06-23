@@ -683,6 +683,16 @@ void FGitSourceControlProvider::UpdateRepositoryStatus(const class FGitSourceCon
 	}
 }
 
+bool FGitSourceControlProvider::DoesStatusBranchPatternAtHierarchyIndexEndWithAWildcard(const int32 Index) const
+{
+	if (!StatusBranchNamePatternsInternal.IsValidIndex(Index))
+	{
+		return false;
+	}
+
+	return StatusBranchNamePatternsInternal[Index].EndsWith(TEXT("*"));
+}
+
 void FGitSourceControlProvider::Tick()
 {
 #if ENGINE_MAJOR_VERSION < 5
@@ -981,22 +991,6 @@ int32 FGitSourceControlProvider::GetStateBranchIndex(const FString& StateBranchN
 	}
 
 	return GetStatusBranchHierarchyIndex(StateBranchName);
-}
-
-TArray<FString> FGitSourceControlProvider::GetStatusBranchNames() const
-{
-	if (PathToGitBinary.IsEmpty() || PathToRepositoryRoot.IsEmpty())
-	{
-		return {};
-	}
-
-	TSet<FString> BranchSet;
-	for (int32 i = 0; i < StatusBranchNamePatternsInternal.Num(); i++)
-	{
-		GetStatusBranchesAtHierarchyIndex(i, BranchSet);
-	}
-
-	return BranchSet.Array();
 }
 
 #undef LOCTEXT_NAMESPACE
