@@ -211,8 +211,6 @@ public:
 
 	const FString& GetRemoteBranchName() const { return RemoteBranchName; }
 
-	TArray<FString> GetStatusBranchNames() const;
-
 	/**
 	 * Returns the hierarchy level for a branch by matching it against the registered status branch patterns.
 	 * Each pattern in StatusBranchNamePatternsInternal represents one hierarchy level (index 0 = most stable, e.g. release branches).
@@ -225,7 +223,9 @@ public:
 	 * Intended to be called multiple times to accumulate branches across adjacent levels.
 	 */
 	void GetStatusBranchesAtHierarchyIndex(int32 HierarchyIndex, TSet<FString>& OutBranches) const;
-	
+
+	bool DoesStatusBranchPatternAtHierarchyIndexEndWithAWildcard(const int32 Index) const;
+
 	/** Indicates editor binaries are to be updated upon next sync */
 	bool bPendingRestart;
 
