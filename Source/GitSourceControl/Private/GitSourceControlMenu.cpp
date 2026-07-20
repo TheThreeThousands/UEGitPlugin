@@ -253,7 +253,13 @@ void FGitSourceControlMenu::CommitClicked()
 	FLevelEditorModule & LevelEditorModule = FModuleManager::Get().LoadModuleChecked<FLevelEditorModule>("LevelEditor");
 	
 	ISourceControlProvider& SourceControlProvider = ISourceControlModule::Get().GetProvider();
-	const TOptional<bool> bAtLatestRevision = SourceControlProvider.IsAtLatestRevision();
+	const TOptional<bool> bAtLatestRevision =
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 8
+		SourceControlProvider.HasChangesToSync();
+#else
+		SourceControlProvider.IsAtLatestRevision();
+#endif
+
 	if (bAtLatestRevision.IsSet() && !bAtLatestRevision.GetValue())
 	{
 		static const FText Message = FText::FromString(TEXT("Your local repository is not at the latest revision. "

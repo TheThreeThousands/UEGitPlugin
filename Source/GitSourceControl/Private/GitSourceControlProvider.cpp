@@ -581,26 +581,31 @@ bool FGitSourceControlProvider::UsesFileRevisions() const
 	return true;
 }
 
+#if ENGINE_MINOR_VERSION >= 8
+TOptional<bool> FGitSourceControlProvider::HasChangesToSync() const
+{
+	// [DIVERGENCE]
+	return GitSourceControlUtils::IsAtLatestRevision(PathToGitBinary, PathToRepositoryRoot);
+	// [END DIVERGENCE]
+}
+
+TOptional<bool> FGitSourceControlProvider::HasChangesToCheckIn() const
+{
+	return TOptional<bool>();
+}
+#else
 TOptional<bool> FGitSourceControlProvider::IsAtLatestRevision() const
 {
-	TArray<FString> ErrorMessages;
-	int NumRevisionsBehind = 0;
-	const bool bSuccess = GitSourceControlUtils::GetNumRevisionsBehindOrigin(PathToGitBinary, PathToRepositoryRoot, NumRevisionsBehind, ErrorMessages);
-	
-	if (bSuccess)
-	{
-		return TOptional<bool>(NumRevisionsBehind == 0);
-	}
-	else
-	{
-		return TOptional<bool>();
-	}
+	// [DIVERGENCE]
+	return GitSourceControlUtils::IsAtLatestRevision(PathToGitBinary, PathToRepositoryRoot);
+	// [END DIVERGENCE]
 }
 
 TOptional<int> FGitSourceControlProvider::GetNumLocalChanges() const
 {
 	return TOptional<int>();
 }
+#endif
 #endif
 
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 2
@@ -618,6 +623,13 @@ bool FGitSourceControlProvider::UsesUncontrolledChangelists() const
 }
 
 bool FGitSourceControlProvider::UsesSnapshots() const
+{
+	return false;
+}
+#endif
+
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 8
+bool FGitSourceControlProvider::UsesSoftRevertOnDelete() const
 {
 	return false;
 }

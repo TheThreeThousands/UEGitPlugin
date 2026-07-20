@@ -49,6 +49,13 @@
 
 #include "Algo/Count.h"
 
+// [DIVERGENCE]
+#if PLATFORM_MAC
+#include "Apple/ScopeAutoreleasePool.h"
+#include "Mac/MacSystemIncludes.h"
+#endif
+// [END DIVERGENCE]
+
 #ifndef GIT_DEBUG_STATUS
 #define GIT_DEBUG_STATUS 0
 #endif
@@ -2089,6 +2096,7 @@ bool RunGetHistory(const FString& InPathToGitBinary, const FString& InRepository
 	{
 		TArray<FString> Results;
 		TArray<FString> Parameters;
+		Parameters.Add(TEXT("--no-color"));
 		Parameters.Add(TEXT("--follow")); // follow file renames
 		Parameters.Add(TEXT("--date=raw"));
 		Parameters.Add(TEXT("--name-status")); // relative filename at this revision, preceded by a status character
@@ -2640,6 +2648,23 @@ void SyncAssetsFromBranch(const FString& InPathToGitBinary, const FString& InRep
 	}
 }
 
+// [DIVERGENCE]
+TOptional<bool> IsAtLatestRevision(const FString& PathToGitBinary, const FString& PathToRepositoryRoot)
+{
+	TArray<FString> ErrorMessages;
+	int NumRevisionsBehind = 0;
+	const bool bSuccess = GitSourceControlUtils::GetNumRevisionsBehindOrigin(PathToGitBinary, PathToRepositoryRoot, NumRevisionsBehind, ErrorMessages);
+
+	if (bSuccess)
+	{
+		return TOptional<bool>(NumRevisionsBehind == 0);
+	}
+	else
+	{
+		return TOptional<bool>();
+	}
+}
+// [END DIVERGENCE]
 
 } // namespace GitSourceControlUtils
 

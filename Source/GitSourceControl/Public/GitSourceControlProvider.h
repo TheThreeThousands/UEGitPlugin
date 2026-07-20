@@ -77,13 +77,21 @@ public:
 	virtual bool UsesCheckout() const override;
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 1
 	virtual bool UsesFileRevisions() const override;
+#if ENGINE_MINOR_VERSION >= 8
+	virtual TOptional<bool> HasChangesToSync() const override;
+	virtual TOptional<bool> HasChangesToCheckIn() const override;
+#else
 	virtual TOptional<bool> IsAtLatestRevision() const override;
 	virtual TOptional<int> GetNumLocalChanges() const override;
+#endif
 #endif
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 2
 	virtual bool AllowsDiffAgainstDepot() const override;
 	virtual bool UsesUncontrolledChangelists() const override;
 	virtual bool UsesSnapshots() const override;
+#endif
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 8
+	virtual bool UsesSoftRevertOnDelete() const override;
 #endif
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 3
 	virtual bool CanExecuteOperation( const FSourceControlOperationRef& InOperation ) const override;
