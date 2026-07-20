@@ -2648,6 +2648,8 @@ void SyncAssetsFromBranch(const FString& InPathToGitBinary, const FString& InRep
 	}
 }
 
+// [DIVERGENCE]
+TOptional<bool> IsAtLatestRevision(const FString& PathToGitBinary, const FString& PathToRepositoryRoot)
 {
 	TArray<FString> ErrorMessages;
 	int NumRevisionsBehind = 0;
