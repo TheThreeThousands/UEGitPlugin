@@ -397,4 +397,7 @@ GITSOURCECONTROL_API TSharedPtr< class ISourceControlRevision, ESPMode::ThreadSa
 
 void SyncAssetsFromBranch(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FAssetData>& SelectedAssets, const FString& BranchName);
 
+// [DIVERGENCE]
+TOptional<bool> IsAtLatestRevision(const FString& PathToGitBinary, const FString& PathToRepositoryRoot);
+// [END DIVERGENCE]
 }

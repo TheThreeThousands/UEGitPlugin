@@ -49,6 +49,13 @@
 
 #include "Algo/Count.h"
 
+// [DIVERGENCE]
+#if PLATFORM_MAC
+#include "Apple/ScopeAutoreleasePool.h"
+#include "Mac/MacSystemIncludes.h"
+#endif
+// [END DIVERGENCE]
+
 #ifndef GIT_DEBUG_STATUS
 #define GIT_DEBUG_STATUS 0
 #endif
@@ -2641,6 +2648,21 @@ void SyncAssetsFromBranch(const FString& InPathToGitBinary, const FString& InRep
 	}
 }
 
+{
+	TArray<FString> ErrorMessages;
+	int NumRevisionsBehind = 0;
+	const bool bSuccess = GitSourceControlUtils::GetNumRevisionsBehindOrigin(PathToGitBinary, PathToRepositoryRoot, NumRevisionsBehind, ErrorMessages);
+
+	if (bSuccess)
+	{
+		return TOptional<bool>(NumRevisionsBehind == 0);
+	}
+	else
+	{
+		return TOptional<bool>();
+	}
+}
+// [END DIVERGENCE]
 
 } // namespace GitSourceControlUtils
 

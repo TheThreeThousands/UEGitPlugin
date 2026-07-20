@@ -584,7 +584,9 @@ bool FGitSourceControlProvider::UsesFileRevisions() const
 #if ENGINE_MINOR_VERSION >= 8
 TOptional<bool> FGitSourceControlProvider::HasChangesToSync() const
 {
-	return TOptional<bool>();
+	// [DIVERGENCE]
+	return GitSourceControlUtils::IsAtLatestRevision(PathToGitBinary, PathToRepositoryRoot);
+	// [END DIVERGENCE]
 }
 
 TOptional<bool> FGitSourceControlProvider::HasChangesToCheckIn() const
@@ -594,18 +596,9 @@ TOptional<bool> FGitSourceControlProvider::HasChangesToCheckIn() const
 #else
 TOptional<bool> FGitSourceControlProvider::IsAtLatestRevision() const
 {
-	TArray<FString> ErrorMessages;
-	int NumRevisionsBehind = 0;
-	const bool bSuccess = GitSourceControlUtils::GetNumRevisionsBehindOrigin(PathToGitBinary, PathToRepositoryRoot, NumRevisionsBehind, ErrorMessages);
-	
-	if (bSuccess)
-	{
-		return TOptional<bool>(NumRevisionsBehind == 0);
-	}
-	else
-	{
-		return TOptional<bool>();
-	}
+	// [DIVERGENCE]
+	return GitSourceControlUtils::IsAtLatestRevision(PathToGitBinary, PathToRepositoryRoot);
+	// [END DIVERGENCE]
 }
 
 TOptional<int> FGitSourceControlProvider::GetNumLocalChanges() const
