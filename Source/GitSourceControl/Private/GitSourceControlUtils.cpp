@@ -1398,7 +1398,13 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	// We only care about changes to branches at the same level as us, or one level up
 	// Our branches always merge up 1 index, and then automerge down.
 	Provider.GetStatusBranchesAtHierarchyIndex(CurrentBranchHierarchyIndex, BranchesToDiff);
-	Provider.GetStatusBranchesAtHierarchyIndex(CurrentBranchHierarchyIndex-1, BranchesToDiff);
+	
+	// If the current branch pattern doesn't end in a wildcard (eg. origin/main) then we want 
+	// to search in the opposite direction so the child branches are checked instead of unrelated
+	// branches on a different hierarchy. (eg origin/main check origin/* instead of release/*).
+	// This supports working on a stable status branch.
+	const int Offset = Provider.DoesStatusBranchPatternAtHierarchyIndexEndWithAWildcard(CurrentBranchHierarchyIndex) ? -1 : 1;
+	Provider.GetStatusBranchesAtHierarchyIndex(CurrentBranchHierarchyIndex + Offset, BranchesToDiff);
 
 	if (!BranchesToDiff.Num())
 	{
