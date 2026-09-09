@@ -190,12 +190,20 @@ void FGitSourceControlModule::CreateGitContentBrowserAssetMenu(FMenuBuilder& Men
 	const int StateBranchIndex = SourceControlProvider.GetStateBranchIndex(RemoteBranchName);
 
 	FString BranchName = RemoteBranchName;
-	if (!SourceControlProvider.DoesStatusBranchPatternAtHierarchyIndexEndWithAWildcard(StateBranchIndex))
+	if (SourceControlProvider.DoesStatusBranchPatternAtHierarchyIndexEndWithAWildcard(StateBranchIndex))
 	{
 		const int StatusBranchIndex = StateBranchIndex - 1;
-		TSet<FString> StatusBranches;
-		SourceControlProvider.GetStatusBranchesAtHierarchyIndex(StatusBranchIndex, StatusBranches);
-		BranchName = *StatusBranches.begin();
+		TSet<FString> Branches;
+		SourceControlProvider.GetStatusBranchesAtHierarchyIndex(StatusBranchIndex, Branches);
+		if (Branches.Num() != 1)
+		{
+			ensureMsgf(false, TEXT("CreateGitContentBrowserAssetMenu: Expected 1 status branch at index %d (remote branch %s), but found %d."),
+				StatusBranchIndex, *RemoteBranchName, Branches.Num());
+
+			return;
+		}
+
+		BranchName = *Branches.begin();
 	}
 
 	MenuBuilder.AddMenuEntry(
