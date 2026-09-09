@@ -51,7 +51,9 @@
 
 // [DIVERGENCE]
 #if PLATFORM_MAC
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 8
 #include "Apple/ScopeAutoreleasePool.h"
+#endif
 #include "Mac/MacSystemIncludes.h"
 #endif
 // [END DIVERGENCE]
