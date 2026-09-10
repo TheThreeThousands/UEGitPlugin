@@ -189,24 +189,22 @@ void FGitSourceControlModule::CreateGitContentBrowserAssetMenu(FMenuBuilder& Men
 	const FString& RemoteBranchName = SourceControlProvider.GetRemoteBranchName();
 	const int StateBranchIndex = SourceControlProvider.GetStateBranchIndex(RemoteBranchName);
 
-	if (!SourceControlProvider.DoesStatusBranchPatternAtHierarchyIndexEndWithAWildcard(StateBranchIndex))
+	FString BranchName = RemoteBranchName;
+	if (SourceControlProvider.DoesStatusBranchPatternAtHierarchyIndexEndWithAWildcard(StateBranchIndex))
 	{
-		// If there is no wildcard on our index then we are already on a status branch, and
-		// it is essentially invalid to do most git operations against ourselves.
-		return;
-	}
+		const int StatusBranchIndex = StateBranchIndex - 1;
+		TSet<FString> Branches;
+		SourceControlProvider.GetStatusBranchesAtHierarchyIndex(StatusBranchIndex, Branches);
+		if (Branches.Num() != 1)
+		{
+			ensureMsgf(false, TEXT("CreateGitContentBrowserAssetMenu: Expected 1 status branch at index %d (remote branch %s), but found %d."),
+				StatusBranchIndex, *RemoteBranchName, Branches.Num());
 
-	const int StatusBranchIndex = StateBranchIndex - 1;
-	TSet<FString> StatusBranches;
-	SourceControlProvider.GetStatusBranchesAtHierarchyIndex(StatusBranchIndex, StatusBranches);
-	if (StatusBranches.Num() != 1)
-	{
-		ensureMsgf(false, TEXT("CreateGitContentBrowserAssetMenu: Expected 1 status branch at index %d (remote branch %s), but found %d."),
-			StatusBranchIndex, *RemoteBranchName, StatusBranches.Num());
-		return;
-	}
+			return;
+		}
 
-	const FString& BranchName = *StatusBranches.begin();
+		BranchName = *Branches.begin();
+	}
 
 	MenuBuilder.AddMenuEntry(
 		FText::Format(LOCTEXT("StatusBranchDiff", "Diff against status branch"), FText::FromString(BranchName)),
