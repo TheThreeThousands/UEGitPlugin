@@ -1396,6 +1396,10 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	{
 		BranchesToDiff.Add(CurrentBranchName);
 	}
+	else if (GetBranchName(InPathToGitBinary, InRepositoryRoot, CurrentBranchName))
+	{
+		CurrentBranchName.InsertAt(0, TEXT("origin/"));
+	}
 	
 	// We only care about changes to branches at the same level as us, or one level up
 	// Our branches always merge up 1 index, and then automerge down.
