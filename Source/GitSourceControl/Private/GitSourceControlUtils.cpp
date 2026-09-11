@@ -1396,9 +1396,9 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	{
 		BranchesToDiff.Add(CurrentBranchName);
 	}
-	else if (GetBranchName(InPathToGitBinary, InRepositoryRoot, CurrentBranchName))
+	else
 	{
-		CurrentBranchName.InsertAt(0, TEXT("origin/"));
+		GetBranchName(InPathToGitBinary, InRepositoryRoot, CurrentBranchName);
 	}
 	
 	// We only care about changes to branches at the same level as us, or one level up
