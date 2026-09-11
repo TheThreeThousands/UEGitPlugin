@@ -1372,6 +1372,13 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	FGitSourceControlProvider& Provider = GitSourceControl->GetProvider();
 
 	bool bDiffAgainstRemoteCurrent = false;
+	
+	// Determine the current branch's position in the status branch hierarchy.
+	// Index 0 = most stable (e.g. release branches). Higher indices = less stable (e.g. feature branches).
+	// Multiple concrete branches can share a hierarchy level via wildcard patterns.
+	// If the current branch does not match any pattern it is a non-status branch and we
+	// include all status branches in the diff (we cannot determine what is "1 above" it).
+	int32 CurrentBranchHierarchyIndex = -1;
 
 	// Get the current branch's remote.
 	FString CurrentBranchName;
@@ -1379,14 +1386,15 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	{
 		// We have a valid remote, so diff against it.
 		bDiffAgainstRemoteCurrent = true;
+		
+		CurrentBranchHierarchyIndex = Provider.GetStatusBranchHierarchyIndex(CurrentBranchName);
 	}
-
-	// Determine the current branch's position in the status branch hierarchy.
-	// Index 0 = most stable (e.g. release branches). Higher indices = less stable (e.g. feature branches).
-	// Multiple concrete branches can share a hierarchy level via wildcard patterns.
-	// If the current branch does not match any pattern it is a non-status branch and we
-	// include all status branches in the diff (we cannot determine what is "1 above" it).
-	const int32 CurrentBranchHierarchyIndex = Provider.GetStatusBranchHierarchyIndex(CurrentBranchName);
+	else if (GetBranchName(InPathToGitBinary, InRepositoryRoot, CurrentBranchName))
+	{
+		// All status branch patterns begin with "origin/" so we need to temporarily
+		// prepend that so we can get the correct index.
+		CurrentBranchHierarchyIndex = Provider.GetStatusBranchHierarchyIndex(FString::Format(TEXT("origin/%s"), { *CurrentBranchName }));
+	}
 
 	// Build the diff set: always include the current branch's remote (for NotAtHead detection).
 	// For status branches, only include those at the same hierarchy level or 1 level more stable (index - 1).
@@ -1395,10 +1403,6 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	if (bDiffAgainstRemoteCurrent)
 	{
 		BranchesToDiff.Add(CurrentBranchName);
-	}
-	else
-	{
-		GetBranchName(InPathToGitBinary, InRepositoryRoot, CurrentBranchName);
 	}
 	
 	// We only care about changes to branches at the same level as us, or one level up
