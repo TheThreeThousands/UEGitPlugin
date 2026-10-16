@@ -20,6 +20,10 @@
 
 #include "GitSourceControlOperations.h"
 #include "GitSourceControlUtils.h"
+#include "GitSourceControlLog.h"
+#include "Interfaces/IPluginManager.h"
+#include "Misc/Paths.h"
+
 #include "ISourceControlModule.h"
 #include "SourceControlHelpers.h"
 #include "Engine/World.h"
@@ -46,8 +50,22 @@ static TSharedRef<IGitSourceControlWorker, ESPMode::ThreadSafe> CreateWorker()
 	return MakeShareable( new Type() );
 }
 
+static void LogPluginLocation()
+{
+	const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("GitSourceControl"));
+	if (!Plugin.IsValid())
+	{
+		UE_LOG(LogGitSourceControl, Warning, TEXT("GitSourceControl plugin location unknown"));
+		return;
+	}
+	const TCHAR* Origin = Plugin->GetLoadedFrom() == EPluginLoadedFrom::Engine ? TEXT("Engine") : TEXT("Project");
+	UE_LOG(LogGitSourceControl, Log, TEXT("GitSourceControl initializing from %s plugin: %s"), Origin, *FPaths::ConvertRelativePathToFull(Plugin->GetBaseDir()));
+}
+
 void FGitSourceControlModule::StartupModule()
 {
+	LogPluginLocation();
+
 	// Register our operations (implemented in GitSourceControlOperations.cpp by subclassing from Engine\Source\Developer\SourceControl\Public\SourceControlOperations.h)
 	GitSourceControlProvider.RegisterWorker( "Connect", FGetGitSourceControlWorker::CreateStatic( &CreateWorker<FGitConnectWorker> ) );
 	// Note: this provider uses the "CheckOut" command only with Git LFS 2 "lock" command, since Git itself has no lock command (all tracked files in the working copy are always already checked-out).
