@@ -275,6 +275,9 @@ private:
 	/** Update repository status on Connect and UpdateStatus operations */
 	void UpdateRepositoryStatus(const class FGitSourceControlCommand& InCommand);
 
+	/** Pushes the next periodic full refresh back after check outs, check ins and reverts */
+	void DelayNextFullRefreshIfLocksChanged(const class FGitSourceControlCommand& InCommand);
+
 	/** Path to the root of the Unreal revision control repository: usually the ProjectDir */
 	FString PathToRepositoryRoot;
 

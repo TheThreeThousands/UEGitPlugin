@@ -9,6 +9,8 @@
 #include "ISourceControlProvider.h"
 #include "ISourceControlOperation.h"
 
+#include "Templates/Atomic.h"
+
 /**
  *
  */
@@ -25,10 +27,13 @@ public:
 	void Stop() override;
 	void OnSourceControlOperationComplete(const FSourceControlOperationRef& InOperation, ECommandResult::Type InResult);
 
+	/** Restarts the wait for the next full refresh, so the status cache server has time to see lock changes made by the client first */
+	void ResetRefreshTimer();
 
 private:
 	FRunnableThread* Thread;
 	FEvent* StopEvent;
 	bool bRunThread;
 	bool bRefreshSpawned;
+	TAtomic<double> NextRefreshTimeSeconds;
 };

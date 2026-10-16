@@ -721,6 +721,17 @@ bool FGitSourceControlProvider::DoesStatusBranchPatternAtHierarchyIndexEndWithAW
 	return StatusBranchNamePatternsInternal[Index].EndsWith(TEXT("*"));
 }
 
+/** Lock changes take a moment to reach the status cache server, a full refresh right after would report the old lock state */
+void FGitSourceControlProvider::DelayNextFullRefreshIfLocksChanged(const FGitSourceControlCommand& InCommand)
+{
+	const FName OperationName = InCommand.Operation->GetName();
+	const bool bChangesLocks = OperationName == "CheckOut" || OperationName == "CheckIn" || OperationName == "Revert";
+	if (bChangesLocks && InCommand.bCommandSuccessful && Runner)
+	{
+		Runner->ResetRefreshTimer();
+	}
+}
+
 void FGitSourceControlProvider::Tick()
 {
 #if ENGINE_MAJOR_VERSION < 5
@@ -750,6 +761,8 @@ void FGitSourceControlProvider::Tick()
 
 			// let command update the states of any files
 			bStatesUpdated |= Command.Worker->UpdateStates();
+
+			DelayNextFullRefreshIfLocksChanged(Command);
 
 			// dump any messages to output log
 			OutputCommandMessages(Command);

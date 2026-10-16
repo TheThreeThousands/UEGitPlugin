@@ -8,10 +8,13 @@
 
 #include "Async/Async.h"
 
+static constexpr double RefreshIntervalSeconds = 30.0;
+
 FGitSourceControlRunner::FGitSourceControlRunner()
 {
 	bRunThread = true;
 	bRefreshSpawned = false;
+	NextRefreshTimeSeconds = FPlatformTime::Seconds() + RefreshIntervalSeconds;
 	StopEvent = FPlatformProcess::GetSynchEventFromPool(true);
 	Thread = FRunnableThread::Create(this, TEXT("GitSourceControlRunner"));
 }
@@ -35,7 +38,14 @@ uint32 FGitSourceControlRunner::Run()
 {
 	while (bRunThread)
 	{
-		StopEvent->Wait(30000);
+		const double SecondsUntilRefresh = NextRefreshTimeSeconds - FPlatformTime::Seconds();
+		if (SecondsUntilRefresh > 0.0)
+		{
+			// Also wakes up when stopped, and re-evaluates the remaining time if the timer was reset meanwhile
+			StopEvent->Wait(static_cast<uint32>(SecondsUntilRefresh * 1000.0));
+			continue;
+		}
+		NextRefreshTimeSeconds = FPlatformTime::Seconds() + RefreshIntervalSeconds;
 		if (!bRunThread)
 		{
 			break;
@@ -80,6 +90,11 @@ uint32 FGitSourceControlRunner::Run()
 	}
 
 	return 0;
+}
+
+void FGitSourceControlRunner::ResetRefreshTimer()
+{
+	NextRefreshTimeSeconds = FPlatformTime::Seconds() + RefreshIntervalSeconds;
 }
 
 void FGitSourceControlRunner::Stop()
