@@ -6,6 +6,7 @@
 #include "GitSourceControlOperations.h"
 
 #include "Misc/Paths.h"
+#include "Algo/AllOf.h"
 #include "Modules/ModuleManager.h"
 #include "SourceControlOperations.h"
 #include "ISourceControlModule.h"
@@ -13,6 +14,10 @@
 #include "GitSourceControlCommand.h"
 #include "GitSourceControlUtils.h"
 #include "GitSourceControlState.h"
+#include "GitStatusCacheClient.h"
+#include "Async/Async.h"
+#include "Interfaces/IHttpResponse.h"
+#include "GitSourceControlLog.h"
 #include "SourceControlHelpers.h"
 #include "Logging/MessageLog.h"
 #include "Misc/MessageDialog.h"
@@ -121,6 +126,69 @@ FName FGitCheckOutWorker::GetName() const
 	return "CheckOut";
 }
 
+static bool AskToUseFallbackAfterServerError(const FString& ServerError)
+{
+	const FText Message = FText::Format(LOCTEXT("StatusCacheServerError", "GitStatusCacheServer error:\n{0}\n\nUse the default git behaviour instead?"), FText::FromString(ServerError));
+	return FMessageDialog::Open(EAppMsgType::YesNo, Message) == EAppReturnType::Yes;
+}
+
+/** Returns true if the check out should proceed, either because the server allows it or the user chose the fallback. Files the user already has locked are added to OutAlreadyLockedFiles. */
+static bool IsCheckoutAllowedByStatusCacheServer(FGitSourceControlCommand& InCommand, const TArray<FString>& RelativeFiles, bool& bOutUsingFallback, TArray<FString>& OutAlreadyLockedFiles)
+{
+	const FGitSourceControlProvider& Provider = FGitSourceControlModule::Get().GetProvider();
+	FString HeadCommitId;
+	if (!GitSourceControlUtils::GetHeadCommitId(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, HeadCommitId))
+	{
+		HeadCommitId.Empty();
+	}
+	for (const FString& RelativeFile : RelativeFiles)
+	{
+		const FString ServerPath = GitStatusCacheClient::MakeServerPath(RelativeFile, InCommand.PathToGitRoot);
+		const GitStatusCacheClient::FCanCheckoutResult Result = GitStatusCacheClient::SendCanCheckoutRequest(ServerPath, Provider.GetLockUser(), Provider.GetBranchName(), HeadCommitId);
+		if (!Result.bServerResponded)
+		{
+			UE_LOG(LogGitSourceControl, Warning, TEXT("CheckOut: server could not answer for %s: %s"), *ServerPath, *Result.Reason);
+			InCommand.ResultInfo.ErrorMessages.Add(Result.Reason);
+			bOutUsingFallback = AskToUseFallbackAfterServerError(Result.Reason);
+			UE_LOG(LogGitSourceControl, Log, TEXT("CheckOut: user chose %s after server error"), bOutUsingFallback ? TEXT("the git fallback") : TEXT("to cancel"));
+			return bOutUsingFallback;
+		}
+		UE_LOG(LogGitSourceControl, Log, TEXT("CheckOut: server verdict for %s: canCheckout=%s, code=%d, reason '%s'"), *ServerPath, Result.bCanCheckout ? TEXT("true") : TEXT("false"), static_cast<int32>(Result.Code), *Result.Reason);
+		if (!Result.bCanCheckout)
+		{
+			InCommand.ResultInfo.ErrorMessages.Add(FString::Printf(TEXT("Cannot check out %s: %s"), *ServerPath, *Result.Reason));
+			FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(FString::Printf(TEXT("Cannot check out %s\n\n%s"), *ServerPath, *Result.Reason)));
+			return false;
+		}
+		if (Result.Code == GitStatusCacheClient::ECheckoutCode::AlreadyLockedByYou)
+		{
+			OutAlreadyLockedFiles.Add(RelativeFile);
+		}
+	}
+	return true;
+}
+
+static bool AreAllFilesLockedByUser(const TMap<const FString, FGitState>& InStates, const TArray<FString>& AbsoluteFiles, const FString& LockUser)
+{
+	return Algo::AllOf(AbsoluteFiles, [&InStates, &LockUser](const FString& AbsoluteFile)
+		{
+			const FGitState* State = InStates.Find(AbsoluteFile);
+			return State && State->LockState == ELockState::Locked && State->LockUser == LockUser;
+		});
+}
+
+static void MakeFilesWritable(const TArray<FString>& AbsoluteFiles)
+{
+	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+	for (const FString& AbsoluteFile : AbsoluteFiles)
+	{
+		if (PlatformFile.FileExists(*AbsoluteFile))
+		{
+			PlatformFile.SetReadOnly(*AbsoluteFile, false);
+		}
+	}
+}
+
 bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(FGitCheckOutWorker::Execute);
@@ -150,7 +218,23 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 		return InCommand.bCommandSuccessful;
 	}
 
-	const bool bSuccess = GitSourceControlUtils::RunLFSCommand(TEXT("lock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), LockableRelativeFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+	bool bUsingFallback = false;
+	TArray<FString> AlreadyLockedRelativeFiles;
+	const bool bUsingStatusCacheServer = FGitSourceControlModule::Get().AccessSettings().IsUsingStatusCacheServer();
+	if (bUsingStatusCacheServer && !IsCheckoutAllowedByStatusCacheServer(InCommand, LockableRelativeFiles, bUsingFallback, AlreadyLockedRelativeFiles))
+	{
+		InCommand.bCommandSuccessful = false;
+		return InCommand.bCommandSuccessful;
+	}
+	const bool bServerAllowedCheckout = bUsingStatusCacheServer && !bUsingFallback;
+	UE_LOG(LogGitSourceControl, Log, TEXT("CheckOut: %d lockable file(s), server %s, %d already locked by us, %d to lock with git lfs"), LockableRelativeFiles.Num(),
+		bServerAllowedCheckout ? TEXT("allowed it") : (bUsingStatusCacheServer ? TEXT("failed, using git fallback") : TEXT("not used")), AlreadyLockedRelativeFiles.Num(), LockableRelativeFiles.Num() - AlreadyLockedRelativeFiles.Num());
+
+	const TArray<FString> FilesToLock = LockableRelativeFiles.FilterByPredicate([&AlreadyLockedRelativeFiles](const FString& RelativeFile)
+		{
+			return !AlreadyLockedRelativeFiles.Contains(RelativeFile);
+		});
+	const bool bSuccess = FilesToLock.IsEmpty() || GitSourceControlUtils::RunLFSCommand(TEXT("lock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), FilesToLock, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 	InCommand.bCommandSuccessful = bSuccess;
 	const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
 
@@ -174,10 +258,24 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 			State.LockState = ELockState::Locked;
 			State.LockUser = LockUser;
 		}
+		if (bServerAllowedCheckout)
+		{
+			MakeFilesWritable(AbsoluteFiles);
+		}
 	}
 	else
 	{
-		InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+		UE_LOG(LogGitSourceControl, Warning, TEXT("CheckOut: git lfs lock failed, refreshing locks to see the real lock state"));
+		const bool bRefreshed = GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+		if (bServerAllowedCheckout)
+		{
+			InCommand.bCommandSuccessful = bRefreshed && AreAllFilesLockedByUser(States, AbsoluteFiles, LockUser);
+			UE_LOG(LogGitSourceControl, Log, TEXT("CheckOut: after lock refresh all files locked by us = %s"), InCommand.bCommandSuccessful ? TEXT("true") : TEXT("false"));
+			if (InCommand.bCommandSuccessful)
+			{
+				MakeFilesWritable(AbsoluteFiles);
+			}
+		}
 	}
 
 	return InCommand.bCommandSuccessful;
@@ -734,10 +832,87 @@ FName FGitFetchWorker::GetName() const
 	return "Fetch";
 }
 
+/** Explains why the server refused the request, once per HEAD commit so periodic refreshes don't repeat it */
+static void NotifyHeadUnknownToServer(const FString& HeadCommitId, const FString& BranchName, const FString& ServerError)
+{
+	static FString LastNotifiedHeadCommitId;
+	if (LastNotifiedHeadCommitId == HeadCommitId)
+	{
+		return;
+	}
+	LastNotifiedHeadCommitId = HeadCommitId;
+
+	const FText Message = FText::Format(LOCTEXT("StatusCacheServerHeadUnknown",
+		"Your current commit {0} on branch '{1}' is not in the server's repository.\n\n"
+		"Push your commits to use the server. Falling back to the default git refresh for now.\n\n"
+		"Server response: {2}"),
+		FText::FromString(HeadCommitId.Left(8)), FText::FromString(BranchName), FText::FromString(ServerError));
+		AsyncTask(ENamedThreads::GameThread, [Message]()
+		{
+			FMessageDialog::Open(EAppMsgType::Ok, Message);
+		});
+}
+
+/** Returns true if the status cache server is enabled and returned a snapshot, in which case git fetch and git lfs locks are not needed */
+static bool TryFetchStatusSnapshot(const FGitSourceControlCommand& InCommand, GitStatusCacheClient::FStatusSnapshot& OutSnapshot)
+{
+	FGitSourceControlModule& GitSourceControl = FGitSourceControlModule::Get();
+	if (!GitSourceControl.AccessSettings().IsUsingStatusCacheServer())
+	{
+		return false;
+	}
+
+	const FGitSourceControlProvider& Provider = GitSourceControl.GetProvider();
+	FString HeadCommitId;
+	if (!GitSourceControlUtils::GetHeadCommitId(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, HeadCommitId))
+	{
+		UE_LOG(LogSourceControl, Warning, TEXT("Could not read HEAD for the GitStatusCacheServer, falling back to git for full refresh"));
+		return false;
+	}
+
+	OutSnapshot = GitStatusCacheClient::FetchStatusSnapshot(InCommand.PathToRepositoryRoot, Provider.GetLockUser(), Provider.GetBranchName(), HeadCommitId);
+	if (!OutSnapshot.bValid)
+	{
+		UE_LOG(LogSourceControl, Warning, TEXT("%s, falling back to git for full refresh"), *OutSnapshot.Error);
+		if (OutSnapshot.HttpStatusCode == EHttpResponseCodes::Conflict)
+		{
+			NotifyHeadUnknownToServer(HeadCommitId, Provider.GetBranchName(), OutSnapshot.Error);
+		}
+	}
+	return OutSnapshot.bValid;
+}
+
+static bool UpdateStatusFromSnapshot(FGitSourceControlCommand& InCommand, const GitStatusCacheClient::FStatusSnapshot& StatusSnapshot, TMap<const FString, FGitState>& States)
+{
+	const TArray<FString> ProjectDirs = GitSourceControlUtils::GetSourceControlledAssetPaths();
+	TMap<FString, FGitSourceControlState> UpdatedStates;
+	InCommand.bCommandSuccessful = GitSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking,
+																		  ProjectDirs, InCommand.ResultInfo.ErrorMessages, UpdatedStates, &StatusSnapshot);
+	GitSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
+	if (InCommand.bCommandSuccessful)
+	{
+		ReconcileWorkerStateWithStatusUpdate(UpdatedStates, States);
+	}
+	return InCommand.bCommandSuccessful;
+}
+
 bool FGitFetchWorker::Execute(FGitSourceControlCommand& InCommand)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(FGitFetchWorker::Execute);
 
+	check(InCommand.Operation->GetName() == GetName());
+	TSharedRef<FGitFetch, ESPMode::ThreadSafe> Operation = StaticCastSharedRef<FGitFetch>(InCommand.Operation);
+
+	GitStatusCacheClient::FStatusSnapshot StatusSnapshot;
+	if (Operation->bUpdateStatus && TryFetchStatusSnapshot(InCommand, StatusSnapshot))
+	{
+		UE_LOG(LogGitSourceControl, Log, TEXT("Full refresh: using GitStatusCacheServer snapshot, skipping git fetch and git lfs locks"));
+		FGitScopedLogTimer SnapshotRefreshTimer(TEXT("Full refresh from snapshot"));
+		return UpdateStatusFromSnapshot(InCommand, StatusSnapshot, States);
+	}
+
+	UE_LOG(LogGitSourceControl, Log, TEXT("Full refresh: using git (fetch%s)"), Operation->bUpdateStatus ? TEXT(", lfs locks, status, remote checks") : TEXT(" only"));
+	FGitScopedLogTimer GitRefreshTimer(TEXT("Full refresh via git"));
 	InCommand.bCommandSuccessful = GitSourceControlUtils::FetchRemote(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.bUsingGitLfsLocking,
 																	  InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 	if (!InCommand.bCommandSuccessful)
@@ -745,8 +920,6 @@ bool FGitFetchWorker::Execute(FGitSourceControlCommand& InCommand)
 		return false;
 	}
 
-	check(InCommand.Operation->GetName() == GetName());
-	TSharedRef<FGitFetch, ESPMode::ThreadSafe> Operation = StaticCastSharedRef<FGitFetch>(InCommand.Operation);
 
 	if (Operation->bUpdateStatus)
 	{

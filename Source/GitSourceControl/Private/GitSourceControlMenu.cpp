@@ -249,9 +249,9 @@ void FGitSourceControlMenu::CommitClicked()
 		SourceControlLog.Notify();
 		return;
 	}
-	
+
 	FLevelEditorModule & LevelEditorModule = FModuleManager::Get().LoadModuleChecked<FLevelEditorModule>("LevelEditor");
-	
+
 	ISourceControlProvider& SourceControlProvider = ISourceControlModule::Get().GetProvider();
 	const TOptional<bool> bAtLatestRevision =
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 8
@@ -524,7 +524,7 @@ void FGitSourceControlMenu::DisplaySucessNotification(const FName& InOperationNa
 #else
 	Info.Image = FEditorStyle::GetBrush(TEXT("NotificationList.SuccessImage"));
 #endif
-	
+
 	FSlateNotificationManager::Get().AddNotification(Info);
 #if UE_BUILD_DEBUG
 	UE_LOG(LogSourceControl, Log, TEXT("%s"), *NotificationText.ToString());
@@ -585,7 +585,7 @@ void FGitSourceControlMenu::AddMenuExtension(FMenuBuilder& Builder)
 		)
 	);
 #endif
-	
+
 	Builder.AddMenuEntry(
 #if ENGINE_MAJOR_VERSION >= 5
 		"GitPush",

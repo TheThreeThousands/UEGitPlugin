@@ -142,7 +142,7 @@ void FGitSourceControlModule::ShutdownModule()
 	ContentBrowserModule.GetOnAssetSelectionChanged().Remove( CbdHandle_OnAssetSelectionChanged );
 	ContentBrowserModule.GetOnAssetPathChanged().Remove( CbdHandle_OnAssetPathChanged );
 #endif
-	
+
 	TArray<FContentBrowserMenuExtender_SelectedAssets>& CBAssetMenuExtenderDelegates = ContentBrowserModule.GetAllAssetViewContextMenuExtenders();
 	CBAssetMenuExtenderDelegates.RemoveAll([ &ExtenderDelegateHandle = CbdHandle_OnExtendAssetSelectionMenu ]( const FContentBrowserMenuExtender_SelectedAssets& Delegate ) {
 		return Delegate.GetHandle() == ExtenderDelegateHandle;
@@ -171,7 +171,7 @@ void FGitSourceControlModule::SetLastErrors(const TArray<FText>& InErrors)
 TSharedRef<FExtender> FGitSourceControlModule::OnExtendContentBrowserAssetSelectionMenu(const TArray<FAssetData>& SelectedAssets)
 {
 	TSharedRef<FExtender> Extender(new FExtender());
-	
+
 	Extender->AddMenuExtension(
 		"AssetSourceControlActions",
 		EExtensionHook::After,

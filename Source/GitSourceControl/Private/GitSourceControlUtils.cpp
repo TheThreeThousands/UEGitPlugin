@@ -9,6 +9,8 @@
 #include "GitSourceControlCommand.h"
 #include "GitSourceControlModule.h"
 #include "GitSourceControlProvider.h"
+#include "GitStatusCacheClient.h"
+#include "GitSourceControlLog.h"
 #include "HAL/PlatformProcess.h"
 
 #include "HAL/PlatformFile.h"
@@ -262,7 +264,10 @@ bool RunCommandInternalRaw(const FString& InCommand, const FString& InPathToGitB
 	}
 #endif
 
+	const double GitStartTimeSeconds = FPlatformTime::Seconds();
 	FPlatformProcess::ExecProcess(*PathToGitOrEnvBinary, *FullCommand, &ReturnCode, &OutResults, &OutErrors);
+	UE_LOG(LogGitSourceControl, Log, TEXT("[%s] git %s took %.1f ms (return code %d)"), GitSourceControlLog::GetThreadLabel(),
+		*GitSourceControlLog::Truncate(LogableCommand), (FPlatformTime::Seconds() - GitStartTimeSeconds) * 1000.0, ReturnCode);
 
 #if UE_BUILD_DEBUG
 	// TODO: add a setting to easily enable Verbose logging
@@ -773,6 +778,18 @@ bool GetCommitInfo(const FString& InPathToGitBinary, const FString& InRepository
 	}
 
 	return bResults;
+}
+
+bool GetHeadCommitId(const FString& InPathToGitBinary, const FString& InRepositoryRoot, FString& OutCommitId)
+{
+	TArray<FString> InfoMessages;
+	TArray<FString> ErrorMessages;
+	const bool bResult = RunCommand(TEXT("rev-parse"), InPathToGitBinary, InRepositoryRoot, { TEXT("HEAD") }, FGitSourceControlModule::GetEmptyStringArray(), InfoMessages, ErrorMessages);
+	if (bResult && InfoMessages.Num() > 0)
+	{
+		OutCommitId = InfoMessages[0].TrimStartAndEnd();
+	}
+	return bResult && !OutCommitId.IsEmpty();
 }
 
 bool GetRemoteUrl(const FString& InPathToGitBinary, const FString& InRepositoryRoot, FString& OutRemoteUrl)
@@ -1707,9 +1724,70 @@ bool UpdateChangelistStateByCommand()
 }
 #endif
 	
+static void ApplyStatusSnapshot(const GitStatusCacheClient::FStatusSnapshot& Snapshot, FGitSourceControlProvider& Provider, TMap<FString, FGitSourceControlState>& OutStates)
+{
+	const FString& LockUser = Provider.GetLockUser();
+	for (auto& Pair : OutStates)
+	{
+		FGitState& State = Pair.Value.State;
+		if (State.LockState == ELockState::NotLockable)
+		{
+			continue;
+		}
+
+		const FString* Owner = Snapshot.LockOwners.Find(Pair.Key);
+		State.LockState = !Owner ? ELockState::NotLocked : (*Owner == LockUser ? ELockState::Locked : ELockState::LockedOther);
+		State.LockUser = Owner ? *Owner : FString();
+
+		const GitStatusCacheClient::FRemoteChange* RemoteChange = Snapshot.RemoteChanges.Find(Pair.Key);
+		State.RemoteState = !RemoteChange ? ERemoteState::UpToDate : (RemoteChange->bNotAtHead ? ERemoteState::NotAtHead : ERemoteState::NotLatest);
+		State.HeadBranch = RemoteChange ? RemoteChange->HeadBranch : FString();
+	}
+
+	if (Snapshot.bPendingRestart)
+	{
+		Provider.bPendingRestart = true;
+	}
+}
+
+/** Per file refreshes don't ask the server, so leave lock and remote state as cached until the next full refresh */
+static void PreserveCachedLockAndRemoteState(TMap<FString, FGitSourceControlState>& OutStates)
+{
+	for (auto& Pair : OutStates)
+	{
+		Pair.Value.State.RemoteState = ERemoteState::Unset;
+	}
+}
+
+/** Takes lock and remote state from the full refresh snapshot instead of running git lfs locks, git log and git diff. Returns false if git should be used instead. */
+static bool TryApplyStatusCacheServer(const GitStatusCacheClient::FStatusSnapshot* InStatusSnapshot, TMap<FString, FGitSourceControlState>& OutStates)
+{
+	FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
+	if (!GitSourceControl)
+	{
+		return false;
+	}
+
+	if (InStatusSnapshot && InStatusSnapshot->bValid)
+	{
+		FGitScopedLogTimer ApplyTimer(FString::Printf(TEXT("ApplyStatusSnapshot (%d locks, %d remote changes, pendingRestart=%s)"),
+			InStatusSnapshot->LockOwners.Num(), InStatusSnapshot->RemoteChanges.Num(), InStatusSnapshot->bPendingRestart ? TEXT("true") : TEXT("false")));
+		ApplyStatusSnapshot(*InStatusSnapshot, GitSourceControl->GetProvider(), OutStates);
+		return true;
+	}
+
+	if (GitStatusCacheClient::IsActive())
+	{
+		UE_LOG(LogGitSourceControl, Log, TEXT("[%s] RunUpdateStatus: server active, keeping cached lock/remote state (local git status only)"), GitSourceControlLog::GetThreadLabel());
+		PreserveCachedLockAndRemoteState(OutStates);
+		return true;
+	}
+	return false;
+}
+
 // Run a batch of Git "status" command to update status of given files and/or directories.
 bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const bool InUsingLfsLocking, const TArray<FString>& InFiles,
-					 TArray<FString>& OutErrorMessages, TMap<FString, FGitSourceControlState>& OutStates)
+					 TArray<FString>& OutErrorMessages, TMap<FString, FGitSourceControlState>& OutStates, const GitStatusCacheClient::FStatusSnapshot* InStatusSnapshot)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(GitSourceControlUtils::RunUpdateStatus);
 
@@ -1734,6 +1812,7 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
 	Parameters.Add(TEXT("-uall")); // make sure we use -uall to list all files instead of directories
 	Parameters.Add(TEXT("--ignored"));
 	TArray<FString> Results;
+	FGitScopedLogTimer UpdateStatusTimer(FString::Printf(TEXT("RunUpdateStatus (%d files/dirs, snapshot %s)"), RepoFiles.Num(), InStatusSnapshot ? TEXT("provided") : TEXT("none")));
 	// avoid locking the index when not needed (useful for status updates)
 	const bool bResult = RunCommand(TEXT("--no-optional-locks status"), InPathToGitBinary, InRepositoryRoot, Parameters, RepoFiles, Results, OutErrorMessages);
 	TMap<FString, FString> ResultsMap;
@@ -1749,19 +1828,30 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
 	}
 
 #if ENGINE_MAJOR_VERSION == 5
-	UpdateChangelistStateByCommand();
+	{
+		FGitScopedLogTimer ChangelistTimer(TEXT("UpdateChangelistStateByCommand"));
+		UpdateChangelistStateByCommand();
+	}
 #endif
 
 	// If the only files being touched are ones which we have checked out already, don't bother updating the remote status, we don't care, because the status can't have changed underneath us
 	// Unless somebody used a force push, but that edge case isn't worth the increased cost of running these status updates.
 	// NB:	It is important to still update the local status, as saving files doesn't mark them as modified in source control
 	//		The engine relies on this status update to update the file to reflect that it is modified
+	if (TryApplyStatusCacheServer(InStatusSnapshot, OutStates))
+	{
+		return bResult;
+	}
+
+	UE_LOG(LogGitSourceControl, Log, TEXT("[%s] RunUpdateStatus: using git for lock/remote state (server %s)"), GitSourceControlLog::GetThreadLabel(),
+		GitStatusCacheClient::IsActive() ? TEXT("active") : TEXT("inactive"));
 	TArray<TSharedRef<ISourceControlState, ESPMode::ThreadSafe>> States;
 	provider.GetState(InFiles, States, EStateCacheUsage::Use);
 
 	int numCheckedOutFiles = Algo::CountIf(States, [&provider](const TSharedRef<ISourceControlState>& SourceControlState) { return SourceControlState->IsCheckedOut() || SourceControlState->IsAdded(); });
 	if (numCheckedOutFiles != RepoFiles.Num())
 	{
+		FGitScopedLogTimer CheckRemoteTimer(TEXT("CheckRemote"));
 		CheckRemote(InPathToGitBinary, InRepositoryRoot, RepoFiles, OutErrorMessages, OutStates);
 	}
 

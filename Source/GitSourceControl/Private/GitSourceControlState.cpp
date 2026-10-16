@@ -4,6 +4,8 @@
 // or copy at http://opensource.org/licenses/MIT)
 
 #include "GitSourceControlState.h"
+#include "GitSourceControlModule.h"
+#include "GitStatusCacheClient.h"
 
 #if ENGINE_MAJOR_VERSION >= 5
 #include "Textures/SlateIcon.h"
@@ -280,12 +282,22 @@ bool FGitSourceControlState::CanCheckIn() const
 	return false;
 }
 
+static bool IsStatusCacheServerEnabled()
+{
+	return GitStatusCacheClient::IsActive();
+}
+
 bool FGitSourceControlState::CanCheckout() const
 {
 	if (State.LockState == ELockState::NotLockable)
 	{
 		// Everything is already available for check in (checked out).
 		return false;
+	}
+	else if (IsStatusCacheServerEnabled())
+	{
+		// Cached lock and revision state can be stale, the server is asked when the check out happens
+		return State.LockState != ELockState::Locked;
 	}
 	else
 	{

@@ -535,6 +535,33 @@ void SGitSourceControlSettings::ConstructBasedOnEngineVersion( )
 				.HintText(LOCTEXT("LfsUserName_Hint", "Username to lock files on the LFS server"))
 			]
 		]
+		// Experimental: GitStatusCacheServer
+		+SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(2.0f)
+		[
+			SNew(SHorizontalBox)
+			ROW_LEFT( 10.0f )
+			[
+				SNew(SCheckBox)
+				.IsChecked(this, &Self::IsUsingStatusCacheServer)
+				.OnCheckStateChanged(this, &Self::OnCheckedUseStatusCacheServer)
+				.ToolTipText(LOCTEXT("UseStatusCacheServer_Tooltip", "Ask the GitStatusCacheServer whether a file can be checked out and for lock and remote state, instead of running git."))
+				.Content()
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("UseStatusCacheServer", "Experimental: Use GitStatusCacheServer"))
+				]
+			]
+			ROW_RIGHT( 10.0f )
+			[
+				SNew(SEditableTextBox)
+				.Text(this, &Self::GetStatusCacheServerUrl)
+				.OnTextCommitted(this, &Self::OnStatusCacheServerUrlCommited)
+				.IsEnabled(this, &Self::GetIsUsingStatusCacheServer)
+				.HintText(LOCTEXT("StatusCacheServerUrl_Hint", "http://localhost:5050"))
+			]
+		]
 		// [Optional] Initial Git Commit
 		+SVerticalBox::Slot()
 		.AutoHeight()
@@ -923,6 +950,36 @@ bool SGitSourceControlSettings::GetIsUsingGitLfsLocking() const
 ECheckBoxState SGitSourceControlSettings::IsUsingGitLfsLocking() const
 {
 	return (GetIsUsingGitLfsLocking() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked);
+}
+
+void SGitSourceControlSettings::OnCheckedUseStatusCacheServer(ECheckBoxState NewCheckedState)
+{
+	FGitSourceControlModule& GitSourceControl = FGitSourceControlModule::Get();
+	GitSourceControl.AccessSettings().SetUsingStatusCacheServer(NewCheckedState == ECheckBoxState::Checked);
+	GitSourceControl.AccessSettings().SaveSettings();
+}
+
+ECheckBoxState SGitSourceControlSettings::IsUsingStatusCacheServer() const
+{
+	return GetIsUsingStatusCacheServer() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+}
+
+bool SGitSourceControlSettings::GetIsUsingStatusCacheServer() const
+{
+	const FGitSourceControlModule& GitSourceControl = FGitSourceControlModule::Get();
+	return GitSourceControl.AccessSettings().IsUsingStatusCacheServer();
+}
+
+void SGitSourceControlSettings::OnStatusCacheServerUrlCommited(const FText& InText, ETextCommit::Type InCommitType)
+{
+	FGitSourceControlModule& GitSourceControl = FGitSourceControlModule::Get();
+	GitSourceControl.AccessSettings().SetStatusCacheServerUrl(InText.ToString().TrimStartAndEnd());
+	GitSourceControl.AccessSettings().SaveSettings();
+}
+
+FText SGitSourceControlSettings::GetStatusCacheServerUrl() const
+{
+	return FText::FromString(FGitSourceControlModule::Get().AccessSettings().GetStatusCacheServerUrl());
 }
 
 void SGitSourceControlSettings::OnLfsUserNameCommited(const FText& InText, ETextCommit::Type InCommitType)

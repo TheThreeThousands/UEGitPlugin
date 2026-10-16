@@ -29,6 +29,18 @@ public:
 	/** Set the username used by the Git LFS 2 File Locks server */
 	bool SetLfsUserName(const FString& InString);
 
+	/** Tell if file check outs are validated by the GitStatusCacheServer */
+	bool IsUsingStatusCacheServer() const;
+
+	/** Configure usage of the GitStatusCacheServer for file check outs */
+	bool SetUsingStatusCacheServer(const bool InUsingStatusCacheServer);
+
+	/** Base url of the GitStatusCacheServer, without a trailing slash */
+	FString GetStatusCacheServerUrl() const;
+
+	/** Set the base url of the GitStatusCacheServer */
+	bool SetStatusCacheServerUrl(const FString& InString);
+
 	/** Load settings from ini file */
 	void LoadSettings();
 
@@ -47,4 +59,10 @@ private:
 
 	/** Username used by the Git LFS 2 File Locks server */
 	FString LfsUserName;
+
+	/** Experimental: ask the GitStatusCacheServer whether files can be checked out */
+	bool bUsingStatusCacheServer = false;
+
+	/** Base url of the GitStatusCacheServer. Example: http://localhost:5050 */
+	FString StatusCacheServerUrl = TEXT("http://localhost:5050");
 };

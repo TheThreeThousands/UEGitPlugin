@@ -24,6 +24,10 @@
 #include "Async/Async.h"
 #include "GenericPlatform/GenericPlatformFile.h"
 #include "HAL/FileManager.h"
+#include "HttpManager.h"
+#include "GitStatusCacheClient.h"
+#include "GitSourceControlLog.h"
+#include "HttpModule.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/App.h"
 #include "Misc/EngineVersion.h"
@@ -359,7 +363,12 @@ ECommandResult::Type FGitSourceControlProvider::GetState( const TArray<FString>&
 		return ECommandResult::Failed;
 	}
 
-	if (InStateCacheUsage == EStateCacheUsage::ForceUpdate)
+	if (InStateCacheUsage == EStateCacheUsage::ForceUpdate && GitStatusCacheClient::IsActive())
+	{
+		UE_LOG(LogGitSourceControl, Log, TEXT("GetState(ForceUpdate) for %d file(s): skipped, GitStatusCacheServer is active and cached state is used"), InFiles.Num());
+	}
+
+	if (InStateCacheUsage == EStateCacheUsage::ForceUpdate && !GitStatusCacheClient::IsActive())
 	{
 		TArray<FString> ForceUpdate;
 		for (FString Path : InFiles)
@@ -373,6 +382,7 @@ ECommandResult::Type FGitSourceControlProvider::GetState( const TArray<FString>&
 		}
 		if (ForceUpdate.Num() > 0)
 		{
+			UE_LOG(LogGitSourceControl, Log, TEXT("GetState(ForceUpdate): running synchronous status update for %d of %d file(s)"), ForceUpdate.Num(), InFiles.Num());
 			Execute(ISourceControlOperation::Create<FUpdateStatus>(), ForceUpdate);
 		}
 	}
@@ -454,6 +464,12 @@ void FGitSourceControlProvider::UnregisterSourceControlStateChanged_Handle( FDel
 	OnSourceControlStateChanged.Remove( Handle );
 }
 
+/** The status cache server answers check outs instantly, so skip the progress dialog and the generic git failure popup (the worker reports the reason) */
+static bool ShouldSuppressSynchronousMessages(const ISourceControlOperation& Operation)
+{
+	return Operation.GetName() == "CheckOut" && GitStatusCacheClient::IsActive();
+}
+
 #if ENGINE_MAJOR_VERSION < 5
 ECommandResult::Type FGitSourceControlProvider::Execute( const FSourceControlOperationRef& InOperation, const TArray<FString>& InFiles, EConcurrency::Type InConcurrency, const FSourceControlOperationComplete& InOperationCompleteDelegate )
 #else
@@ -503,7 +519,7 @@ ECommandResult::Type FGitSourceControlProvider::Execute( const FSourceControlOpe
 #if UE_BUILD_DEBUG
 		UE_LOG(LogSourceControl, Log, TEXT("ExecuteSynchronousCommand(%s)"), *InOperation->GetName().ToString());
 #endif
-		return ExecuteSynchronousCommand(*Command, InOperation->GetInProgressString(), false);
+		return ExecuteSynchronousCommand(*Command, InOperation->GetInProgressString(), ShouldSuppressSynchronousMessages(*InOperation));
 	}
 	else
 	{
@@ -803,6 +819,15 @@ TSharedRef<class SWidget> FGitSourceControlProvider::MakeSettingsWidget() const
 }
 #endif
 
+/** Synchronous commands block the game thread without running the core ticker, so the status cache server request would never complete */
+static void TickHttpIfUsingStatusCacheServer()
+{
+	if (FGitSourceControlModule::Get().AccessSettings().IsUsingStatusCacheServer())
+	{
+		FHttpModule::Get().GetHttpManager().Tick(0.0f);
+	}
+}
+
 ECommandResult::Type FGitSourceControlProvider::ExecuteSynchronousCommand(FGitSourceControlCommand& InCommand, const FText& Task, bool bSuppressResponseMsg)
 {
 	ECommandResult::Type Result = ECommandResult::Failed;
@@ -838,6 +863,7 @@ ECommandResult::Type FGitSourceControlProvider::ExecuteSynchronousCommand(FGitSo
 		{
 			// Tick the command queue and update progress.
 			Tick();
+			TickHttpIfUsingStatusCacheServer();
 
 			if (i >= 20) {
 				Progress.Tick();

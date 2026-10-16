@@ -69,6 +69,12 @@ private:
 	ECheckBoxState IsUsingGitLfsLocking() const;
 	bool GetIsUsingGitLfsLocking() const;
 
+	void OnCheckedUseStatusCacheServer(ECheckBoxState NewCheckedState);
+	ECheckBoxState IsUsingStatusCacheServer() const;
+	bool GetIsUsingStatusCacheServer() const;
+	void OnStatusCacheServerUrlCommited(const FText& InText, ETextCommit::Type InCommitType);
+	FText GetStatusCacheServerUrl() const;
+
 	void OnLfsUserNameCommited(const FText& InText, ETextCommit::Type InCommitType);
 	FText GetLfsUserName() const;
 

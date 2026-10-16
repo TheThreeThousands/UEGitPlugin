@@ -39,6 +39,11 @@ private:
 
 struct FGitVersion;
 
+namespace GitStatusCacheClient
+{
+	struct FStatusSnapshot;
+}
+
 namespace GitSourceControlUtils
 {
 	/**
@@ -161,6 +166,9 @@ bool GetRemoteBranchName(const FString& InPathToGitBinary, const FString& InRepo
  */
 bool GetCommitInfo(const FString& InPathToGitBinary, const FString& InRepositoryRoot, FString& OutCommitId, FString& OutCommitSummary);
 
+/** Get the full SHA1 of the local HEAD. Returns true if it could be read. */
+bool GetHeadCommitId(const FString& InPathToGitBinary, const FString& InRepositoryRoot, FString& OutCommitId);
+
 /**
  * Get the URL of the "origin" defaut remote server
  * @param	InPathToGitBinary	The path to the Git binary
@@ -251,10 +259,11 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
  * @param	InFiles				The files to be operated on
  * @param	OutErrorMessages	Any errors (from StdErr) as an array per-line
  * @param   OutStates           The resultant states
+ * @param   InStatusSnapshot    Optional full refresh snapshot from the GitStatusCacheServer to take lock and remote state from. If null and the server is active, cached lock and remote state is kept.
  * @returns true if the command succeeded and returned no errors
  */
 bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const bool InUsingLfsLocking, const TArray<FString>& InFiles,
-					 TArray<FString>& OutErrorMessages, TMap<FString, FGitSourceControlState>& OutStates);
+					 TArray<FString>& OutErrorMessages, TMap<FString, FGitSourceControlState>& OutStates, const GitStatusCacheClient::FStatusSnapshot* InStatusSnapshot = nullptr);
 
 #if ENGINE_MAJOR_VERSION == 5
 /**
