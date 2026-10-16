@@ -15,6 +15,7 @@
 #include "GitSourceControlUtils.h"
 #include "GitSourceControlState.h"
 #include "GitStatusCacheClient.h"
+#include "GitBackgroundLock.h"
 #include "Async/Async.h"
 #include "Interfaces/IHttpResponse.h"
 #include "GitSourceControlLog.h"
@@ -234,7 +235,12 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 		{
 			return !AlreadyLockedRelativeFiles.Contains(RelativeFile);
 		});
-	const bool bSuccess = FilesToLock.IsEmpty() || GitSourceControlUtils::RunLFSCommand(TEXT("lock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), FilesToLock, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+	const bool bLockInBackground = bServerAllowedCheckout && !FilesToLock.IsEmpty();
+	if (bLockInBackground)
+	{
+		GitBackgroundLock::LockFiles(InCommand.PathToGitRoot, InCommand.PathToGitBinary, FilesToLock);
+	}
+	const bool bSuccess = bLockInBackground || FilesToLock.IsEmpty() || GitSourceControlUtils::RunLFSCommand(TEXT("lock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), FilesToLock, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 	InCommand.bCommandSuccessful = bSuccess;
 	const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
 

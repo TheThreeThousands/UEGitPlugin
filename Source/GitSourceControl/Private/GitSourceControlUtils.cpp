@@ -49,6 +49,7 @@
 #include "SourceControlOperations.h"
 #include "SourceControlWindows.h"
 
+#include "Algo/AnyOf.h"
 #include "Algo/Count.h"
 
 // [DIVERGENCE]
@@ -1785,6 +1786,14 @@ static bool TryApplyStatusCacheServer(const GitStatusCacheClient::FStatusSnapsho
 	return false;
 }
 
+static bool ContainsDirectory(const TArray<FString>& InPaths)
+{
+	return Algo::AnyOf(InPaths, [](const FString& Path)
+	{
+		return FPaths::DirectoryExists(Path);
+	});
+}
+
 // Run a batch of Git "status" command to update status of given files and/or directories.
 bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const bool InUsingLfsLocking, const TArray<FString>& InFiles,
 					 TArray<FString>& OutErrorMessages, TMap<FString, FGitSourceControlState>& OutStates, const GitStatusCacheClient::FStatusSnapshot* InStatusSnapshot)
@@ -1828,6 +1837,9 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
 	}
 
 #if ENGINE_MAJOR_VERSION == 5
+	// Rebuilding the changelists scans all of Content/, which is too slow to do for every single file update
+	// The changelist window and full refreshes still rebuild them
+	if (ContainsDirectory(RepoFiles))
 	{
 		FGitScopedLogTimer ChangelistTimer(TEXT("UpdateChangelistStateByCommand"));
 		UpdateChangelistStateByCommand();
