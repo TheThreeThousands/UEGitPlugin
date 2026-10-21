@@ -13,6 +13,10 @@
 #include "GitSourceControlCommand.h"
 #include "GitSourceControlUtils.h"
 #include "GitSourceControlState.h"
+// [DIVERGENCE]
+#include "GitBackgroundLock.h"
+#include "GitSourceControlLog.h"
+// [END DIVERGENCE]
 #include "SourceControlHelpers.h"
 #include "Logging/MessageLog.h"
 #include "Misc/MessageDialog.h"
@@ -150,10 +154,6 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 		return InCommand.bCommandSuccessful;
 	}
 
-	const bool bSuccess = GitSourceControlUtils::RunLFSCommand(TEXT("lock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), LockableRelativeFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-	InCommand.bCommandSuccessful = bSuccess;
-	const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
-
 	TArray<FString> AbsoluteFiles;
 	AbsoluteFiles.Reserve(LockableRelativeFiles.Num());
 	FString GitPath = InCommand.PathToGitRoot;
@@ -163,6 +163,25 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 			FPaths::NormalizeFilename(AbsoluteFilePath);
 			return AbsoluteFilePath;
 		});
+
+	// [DIVERGENCE] Lock in the background when a quick check says the lock will succeed, so moving an actor does not wait on
+	// git lfs lock. A failed background lock asks the user to revert or keep the change. Anything else takes the blocking path.
+	// const bool bSuccess = GitSourceControlUtils::RunLFSCommand(TEXT("lock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), LockableRelativeFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+	FString BlockingLockReason;
+	const bool bLockInBackground = GitBackgroundLock::CanLockInBackground(InCommand.PathToGitRoot, InCommand.PathToGitBinary, AbsoluteFiles, BlockingLockReason);
+	if (bLockInBackground)
+	{
+		UE_LOG(LogGitSourceControl, Log, TEXT("[%s] Locking %d files in the background"), GitSourceControlLog::GetThreadLabel(), LockableRelativeFiles.Num());
+		GitBackgroundLock::LockFiles(InCommand.PathToGitRoot, InCommand.PathToGitBinary, LockableRelativeFiles);
+	}
+	else
+	{
+		UE_LOG(LogGitSourceControl, Log, TEXT("[%s] Locking %d files and waiting: %s"), GitSourceControlLog::GetThreadLabel(), LockableRelativeFiles.Num(), *BlockingLockReason);
+	}
+	const bool bSuccess = bLockInBackground || GitSourceControlUtils::RunLFSCommand(TEXT("lock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), LockableRelativeFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+	// [END DIVERGENCE]
+	InCommand.bCommandSuccessful = bSuccess;
+	const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
 
 	if (bSuccess)
 	{
