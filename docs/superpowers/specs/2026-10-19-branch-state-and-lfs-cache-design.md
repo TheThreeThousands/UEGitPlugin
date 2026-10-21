@@ -1,6 +1,6 @@
 # GitBranchStateCache and GitLfsCache support
 
-Status: draft for review, 2026-10-19. Branch: `support-gitbranchstatecache-and-gitlfscache` (from `dev-3k`).
+Status: approved 2026-10-19, Changes 4 and 5 added 2026-10-22. Branch: `support-gitbranchstatecache-and-gitlfscache` (from `dev-3k`).
 
 ## Intent
 
@@ -40,8 +40,8 @@ ktsu services, on its own branch, borrowing from the prototype where useful.
 
 ## Non-goals
 
-- No patched git-lfs binary and no plugin-side use of GitLfsCache's `POST locks/batch` extension. Locking stays
-  `git lfs lock` through the bundled stock binary.
+- No patched git-lfs binary. The plugin calls GitLfsCache's `POST locks/batch` extension itself (Change 4, added
+  2026-10-22), and `git lfs lock` / `unlock` through the bundled stock binary stay the fallback.
 - No change to the 30 second background `FGitFetch` heartbeat in this pass. It still runs as today (see Deferred).
 - Not porting Brandon's `/status` and `/canCheckout` client, his whole-project snapshot model, or his per-user
   "status cache server" settings UI.
@@ -78,6 +78,13 @@ These would make the work a failure even if it technically worked:
    but https (`IsAllowedStateUrl`). Plain http is allowed only to localhost, and only from the per-user override.
    Revisit if the game repository's commit access widens, for example by binding the credential to the `origin`
    host or to a per-user approved host list.
+7. **Batched locking and unlocking, added 2026-10-22 after the first review.** git-lfs sends one lock request per
+   file, one after another, which is what Matt meant by batching. The plugin uses GitLfsCache's `locks/batch` for
+   every lock and unlock it issues: check-out (foreground and background), unlock after check-in, and unlock on
+   revert. The vanilla preference still holds in the sense that matters: when the route is not there, stock
+   `git lfs lock` / `unlock` runs exactly as before.
+8. **Whole-tree branch state, added 2026-10-22.** Requests that include a directory are answered from
+   GitBranchStateCache too, by omitting `paths`, instead of always running the local path (previously Deferred).
 
 ## Design
 
@@ -155,9 +162,8 @@ game thread tick. The client must complete in both cases and on every engine ver
 through 5.8, per `CLAUDE.md`), guarded per version if the HTTP API differs.
 
 **Directories.** The service matches `paths` exactly, so a directory such as `Content/` matches nothing and would
-make every file look up to date. Requests that include a directory (the heartbeat and full refreshes) use the
-local path in this pass. They run in the background, so artists do not wait on them. Answering them from the
-service by omitting `paths` is listed under Deferred.
+make every file look up to date. Requests that include a directory (the heartbeat and full refreshes) are
+answered by Change 5 instead.
 
 **Remote URL.** The credential lookup needs an HTTPS `origin`. When `origin` is an SSH URL, the client is
 disabled for the session, with one log line saying why.
@@ -193,6 +199,72 @@ lag does not exist here. This is my call.
 
 Each lands as its own commit crediting Brandon in the message.
 
+### Change 4: batched locking through GitLfsCache
+
+Every place the plugin runs `git lfs lock` or `git lfs unlock` first tries one
+`POST {LfsEndpoint}/locks/batch` for all of the files:
+
+- `FGitCheckOutWorker`, both the blocking lock and `GitBackgroundLock::LockFiles`.
+- `FGitCheckInWorker`, the unlock after a successful push.
+- `FGitRevertWorker`, the unlock of reverted files.
+
+**Endpoint.** The LFS endpoint git-lfs itself resolves (from `.lfsconfig`'s `lfs.url`, git config, or the remote),
+read locally once per session. `git lfs env` prints it as `Endpoint=<url> (auth=...)`. No new plugin config: a
+repository whose `lfs.url` is not GitLfsCache answers `locks/batch` with 404 (or something that is not the
+documented response), and the plugin falls back.
+
+**Request and response.** As documented in the GitLfsCache README, "Batched locking":
+`{"operation":"lock"|"unlock","paths":[...],"ref":{"name":"refs/heads/<branch>"}}`, repository-relative paths
+with forward slashes, `force` never sent. The response is 200 with one result per path, in order, each `ok` with a
+`lock` (id, owner) or not `ok` with a `status` and `message`. The results are authoritative: each file's state
+comes from its own result. The operation reports success only when every result is `ok`, matching what
+`git lfs lock` with several files reports today, and each failed path's message goes to the command's error
+messages. Paths the plugin did not get a result for count as failed. The ref sent matches what git-lfs sends for
+the same operation. The builder confirms the exact value against the bundled git-lfs.
+
+**Credential.** `git credential fill` for the LFS endpoint's host (GitLfsCache needs the credential stored
+against the proxy host, see its README), using the same code, rules and in-memory cache as Change 2 (never logged,
+`credential.interactive=never`, cleared on 401).
+
+**Fallback to the stock command, per call,** on: endpoint not https (http only to localhost, as Change 2);
+no credential; refused connection; timeout; 404 or any other non-200; a body that does not parse or whose result
+count does not match the request. A fallback runs the existing `git lfs lock` / `unlock` call unchanged. A
+404 means the route does not exist, so it disables the batch route for the session. Refused connections and
+repeated timeouts use the same 30 second backoff rules as Change 2. A well-formed 200 is never retried through the
+stock command, even when some items failed, because upstream already answered for every path.
+
+**Timeout.** Locking hundreds of files fans out under the proxy's rate limiter, so a fixed 2 seconds is too short.
+The builder picks a timeout that grows with the number of paths and is capped (order of 2 seconds plus tens of
+milliseconds per path, capped at a minute). A timeout leaves locks possibly granted upstream: after a timeout,
+the stock command runs, and `git lfs lock` on a file the artist already holds succeeds, so the fallback
+reconciles.
+
+**Read-only flag.** `git lfs lock` makes a `lockable` file writable and `git lfs unlock` makes it read-only. On the
+batch route the plugin does the same per successful result (`SetReadOnly`), and only for paths that exist on disk.
+git-lfs's local lock cache (`.git/lfs`, used by `git lfs locks --local` and by its post-checkout and post-merge
+hooks) does not learn about batch locks. The consequence is that a sync after locking can mark a locked but not yet
+modified file read-only again. The existing `UpdateCachedStates` workaround covers modified files. For locked but
+unmodified files, the builder makes a file the plugin's state says is locked by the user writable after a sync.
+`git lfs locks --cached`, which `RefreshLocks` falls back to, reads git-lfs's copy of the last full listing, so it
+catches up on the next successful `git lfs locks`.
+
+**Threading and engine versions.** Same as Change 2: the request runs on the worker, completes on the HTTP thread on
+5.4 and later, and relies on the existing synchronous-loop pump before 5.4. UE4 uses the stock command.
+
+### Change 5: whole-tree branch state
+
+When a `CheckRemote` request includes a directory, the client sends the same request with `paths` omitted. The
+service then returns every path changed on any requested branch relative to its merge base. The plugin:
+
+- gets local blobs for those paths with one `git -c core.quotePath=false ls-tree -r HEAD` (no pathspec) rather
+  than batches of 50,
+- keeps only paths under the requested directories or equal to a requested file, and
+- runs the same comparison and filters as Change 2 (`ComputeNewerFiles`, lockable-only, `bPendingRestart`).
+
+Fallback rules are Change 2's. `truncated: true` (more changed paths than the service's `MaxPathsPerRequest`,
+20,000 by default) is the expected large-repository failure and falls back to the local path for that call. The
+timeout stays 2 seconds: these requests run in the background, and a slow answer costs nothing an artist waits on.
+
 ### Configuration
 
 In the game project's `DefaultEditor.ini`:
@@ -224,6 +296,11 @@ There is no test suite. Verification is by building and running in a host projec
   that branch: the service path should report it up to date.
 - Kill the service mid-session: the next move falls back within the timeout, and later moves skip it during the
   backoff period.
+- Batched locking: check out 50 or more lockable files with `.lfsconfig` pointing at GitLfsCache, confirm one
+  `locks/batch` request and no `git lfs lock` line in the log, and that the files are writable and show as locked.
+  Revert and check in to confirm one batched unlock each. Have someone else lock one of the files first and confirm
+  only that file fails. Point `lfs.url` at the forge directly and confirm the stock commands run.
+- Whole tree: the heartbeat refresh logs one `/state` request and no per-branch `git diff` lines.
 - Point the service at a base it does not know (an unpushed local commit as `@{upstream}` will not do this, so use
   a fresh mirror): `409` falls back cleanly.
 
@@ -240,10 +317,8 @@ There is no test suite. Verification is by building and running in a host projec
 
 - Removing or slowing the 30 second background `git fetch` once the service answers remote state. Worth doing for
   residential links, but it also feeds pull and the current branch's own status, so it is a separate change.
-- Batched locking through GitLfsCache's `locks/batch`, which needs a patched git-lfs (excluded by the vanilla
-  preference).
-- Warming the whole project's remote state on connect, and answering the heartbeat, with one call that omits
-  `paths`.
+- Warming the whole project's remote state on connect. The heartbeat is now answered by Change 5, but nothing
+  calls the service at connect.
 
 ## Service freshness
 
