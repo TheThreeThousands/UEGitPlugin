@@ -35,6 +35,15 @@
 #endif
 
 #include "Algo/RemoveIf.h"
+
+// [DIVERGENCE]
+#include "GitBranchStateCacheClient.h"
+#define GIT_SYNC_LOOP_HAS_HTTP_THREAD_COMPLETION (ENGINE_MAJOR_VERSION > 5 || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 4))
+#if !GIT_SYNC_LOOP_HAS_HTTP_THREAD_COMPLETION
+#include "HttpManager.h"
+#include "HttpModule.h"
+#endif
+// [END DIVERGENCE]
 #include "UObject/Package.h"
 
 #define LOCTEXT_NAMESPACE "GitSourceControl"
@@ -838,6 +847,15 @@ ECommandResult::Type FGitSourceControlProvider::ExecuteSynchronousCommand(FGitSo
 		{
 			// Tick the command queue and update progress.
 			Tick();
+
+			// [DIVERGENCE] Before 5.4 HTTP requests only complete when the HTTP manager ticks on the game thread, which this loop blocks
+#if !GIT_SYNC_LOOP_HAS_HTTP_THREAD_COMPLETION
+			if (GitBranchStateCacheClient::IsRequestInFlight())
+			{
+				FHttpModule::Get().GetHttpManager().Tick(0.0f);
+			}
+#endif
+			// [END DIVERGENCE]
 
 			if (i >= 20) {
 				Progress.Tick();
