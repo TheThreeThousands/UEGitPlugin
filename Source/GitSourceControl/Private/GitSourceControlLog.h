@@ -29,4 +29,7 @@ namespace GitSourceControlLog
 
 	/** Short name of the thread for log lines, e.g. "GameThread" or "Worker" */
 	const TCHAR* GetThreadLabel();
+
+	/** Removes "user:password@" from every URL in a log line, e.g. a remote URL typed with a token in it */
+	FString RedactUserInfo(const FString& Text);
 }

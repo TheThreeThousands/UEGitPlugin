@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "GitSourceControlState.h"
 
 /**
  * Locks files with git lfs without blocking the caller. Used for check outs that a quick pre-check found safe: nobody else
@@ -19,4 +20,11 @@ namespace GitBackgroundLock
 	 * whether to revert the files, since they were already saved without a lock.
 	 */
 	void LockFiles(const FString& PathToGitRoot, const FString& PathToGitBinary, const TArray<FString>& RelativeFiles);
+
+	/**
+	 * The cache update after a failed background lock: one entry per requested file not locked by us, carrying only the lock
+	 * fields (everything else Unset, so UpdateCachedStates leaves the file's status alone and a revert still sees it modified).
+	 * Locks on other files are left out. OutFailedFiles lists those requested files, in request order.
+	 */
+	TMap<const FString, FGitState> BuildLockFailureStates(const TMap<const FString, FGitState>& InRefreshedLocks, const TArray<FString>& InAbsoluteFiles, TArray<FString>& OutFailedFiles);
 }

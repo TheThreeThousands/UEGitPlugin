@@ -216,6 +216,7 @@ namespace
 	{
 		bool bResponded = false;
 		bool bConnectionFailure = false;
+		bool bTimedOut = false;
 		int32 ResponseCode = 0;
 		FString Body;
 		FString Error;
@@ -259,6 +260,7 @@ namespace
 			if (FPlatformTime::Seconds() > DeadlineSeconds)
 			{
 				Request->CancelRequest();
+				Result.bTimedOut = true;
 				Result.Error = TEXT("timed out");
 				return Result;
 			}
@@ -270,9 +272,12 @@ namespace
 #if GIT_BRANCH_STATE_MODERN_HTTP
 			const EHttpFailureReason FailureReason = Request->GetFailureReason();
 			Result.bConnectionFailure = FailureReason == EHttpFailureReason::ConnectionError;
-			Result.Error = FailureReason == EHttpFailureReason::TimedOut ? TEXT("timed out") : (Result.bConnectionFailure ? TEXT("could not connect") : TEXT("request failed"));
+			Result.bTimedOut = FailureReason == EHttpFailureReason::TimedOut;
+			Result.Error = Result.bTimedOut ? TEXT("timed out") : (Result.bConnectionFailure ? TEXT("could not connect") : TEXT("request failed"));
 #else
+			// Older engines do not tell a timeout from other failures, so count both towards the timeout backoff
 			Result.bConnectionFailure = Request->GetStatus() == EHttpRequestStatus::Failed_ConnectionError;
+			Result.bTimedOut = !Result.bConnectionFailure;
 			Result.Error = Result.bConnectionFailure ? TEXT("could not connect") : TEXT("request failed or timed out");
 #endif
 			return Result;
@@ -368,7 +373,12 @@ bool TryGetChangedFilesByBranch(const FString& InPathToGitBinary, const FString&
 	FString Password;
 	if (!GetCredential(InPathToGitBinary, InRepositoryRoot, Remote, UserName, Password))
 	{
-		LogFallbackOnce(FString::Printf(TEXT("no stored git credential for %s"), *Remote.Host));
+		// Asking again on every move would cost a credential helper start (or its full timeout) each time
+		{
+			FScopeLock Lock(&StateCriticalSection);
+			bDisabledForSession = true;
+		}
+		LogFallbackOnce(FString::Printf(TEXT("no stored git credential for %s, disabled for this session"), *Remote.Host));
 		Timer.SetOutcome(TEXT("no credential"));
 		return false;
 	}
@@ -397,10 +407,16 @@ bool TryGetChangedFilesByBranch(const FString& InPathToGitBinary, const FString&
 	const FPostResult Post = PostState(StateUrl + TEXT("/state"), Authorization, Body);
 	if (!Post.bResponded)
 	{
-		if (Post.bConnectionFailure)
 		{
 			FScopeLock Lock(&StateCriticalSection);
-			Backoff.RecordConnectionFailure(FPlatformTime::Seconds());
+			if (Post.bConnectionFailure)
+			{
+				Backoff.RecordConnectionFailure(FPlatformTime::Seconds());
+			}
+			else if (Post.bTimedOut)
+			{
+				Backoff.RecordTimeout(FPlatformTime::Seconds());
+			}
 		}
 		LogFallbackOnce(FString::Printf(TEXT("%s: %s"), *GitBranchStateCache::StripUserInfo(StateUrl), *Post.Error));
 		Timer.SetOutcome(Post.Error);
@@ -410,6 +426,16 @@ bool TryGetChangedFilesByBranch(const FString& InPathToGitBinary, const FString&
 	if (Post.ResponseCode == 401)
 	{
 		ForgetCredential();
+		bool bGiveUp = false;
+		{
+			FScopeLock Lock(&StateCriticalSection);
+			bGiveUp = Backoff.RecordUnauthorized();
+			bDisabledForSession |= bGiveUp;
+		}
+		if (bGiveUp)
+		{
+			LogFallbackOnce(FString::Printf(TEXT("%s refused the stored credential twice, disabled for this session"), *GitBranchStateCache::StripUserInfo(StateUrl)));
+		}
 	}
 	if (Post.ResponseCode < 200 || Post.ResponseCode >= 300)
 	{
@@ -424,6 +450,13 @@ bool TryGetChangedFilesByBranch(const FString& InPathToGitBinary, const FString&
 	{
 		LogFallbackOnce(FString::Printf(TEXT("unusable answer: %s"), *Reason));
 		Timer.SetOutcome(Reason);
+		return false;
+	}
+	if (!GitBranchStateCache::AnswersForBranch(Response, InCurrentRemoteBranch))
+	{
+		// Status branches missing from the mirror are fine to skip, but the current branch carries every NotAtHead
+		LogFallbackOnce(FString::Printf(TEXT("the service does not know %s yet"), *InCurrentRemoteBranch));
+		Timer.SetOutcome(TEXT("current branch missing"));
 		return false;
 	}
 

@@ -320,6 +320,56 @@ bool FGitBranchStateCacheBackoffSuccessTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitBranchStateCacheBackoffTimeoutsTest, "GitSourceControl.BranchStateCache.Backoff.RepeatedTimeouts", GIT_BRANCH_STATE_TEST_FLAGS)
+bool FGitBranchStateCacheBackoffTimeoutsTest::RunTest(const FString& Parameters)
+{
+	FBackoff Backoff;
+	Backoff.RecordTimeout(90.0);
+	Backoff.RecordTimeout(95.0);
+	TestFalse(TEXT("Two timeouts do not back off"), Backoff.ShouldSkip(96.0));
+	Backoff.RecordTimeout(100.0);
+	TestTrue(TEXT("Third timeout in a row backs off"), Backoff.ShouldSkip(129.9));
+	TestFalse(TEXT("For 30 seconds"), Backoff.ShouldSkip(130.0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitBranchStateCacheBackoffTimeoutResetTest, "GitSourceControl.BranchStateCache.Backoff.SuccessResetsTimeouts", GIT_BRANCH_STATE_TEST_FLAGS)
+bool FGitBranchStateCacheBackoffTimeoutResetTest::RunTest(const FString& Parameters)
+{
+	FBackoff Backoff;
+	Backoff.RecordTimeout(90.0);
+	Backoff.RecordTimeout(95.0);
+	Backoff.RecordSuccess();
+	Backoff.RecordTimeout(100.0);
+	TestFalse(TEXT("A success in between resets the count"), Backoff.ShouldSkip(101.0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitBranchStateCacheBackoffUnauthorizedTest, "GitSourceControl.BranchStateCache.Backoff.RepeatedUnauthorized", GIT_BRANCH_STATE_TEST_FLAGS)
+bool FGitBranchStateCacheBackoffUnauthorizedTest::RunTest(const FString& Parameters)
+{
+	FBackoff Backoff;
+	TestFalse(TEXT("First 401 retries with a fresh credential"), Backoff.RecordUnauthorized());
+	TestTrue(TEXT("Second 401 in a row gives up"), Backoff.RecordUnauthorized());
+
+	FBackoff Reset;
+	Reset.RecordUnauthorized();
+	Reset.RecordSuccess();
+	TestFalse(TEXT("A success in between resets the count"), Reset.RecordUnauthorized());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitBranchStateCacheMissingCurrentBranchTest, "GitSourceControl.BranchStateCache.Parse.MissingCurrentBranch", GIT_BRANCH_STATE_TEST_FLAGS)
+bool FGitBranchStateCacheMissingCurrentBranchTest::RunTest(const FString& Parameters)
+{
+	FStateResponse Response;
+	Response.BranchNames = { TEXT("origin/KO-1") };
+	TestFalse(TEXT("Current remote branch missing from the answer"), AnswersForBranch(Response, TEXT("origin/main")));
+	TestTrue(TEXT("Listed branch"), AnswersForBranch(Response, TEXT("origin/KO-1")));
+	TestTrue(TEXT("No current remote branch to check"), AnswersForBranch(Response, FString()));
+	return true;
+}
+
 #undef GIT_BRANCH_STATE_TEST_FLAGS
 
 #endif

@@ -9,6 +9,8 @@
 #include "ISourceControlModule.h"
 #include "Misc/MessageDialog.h"
 #include "Misc/Paths.h"
+#include "Runtime/Launch/Resources/Version.h"
+#include "SourceControlHelpers.h"
 #include "SourceControlOperations.h"
 
 #define LOCTEXT_NAMESPACE "GitSourceControl"
@@ -39,7 +41,12 @@ namespace GitBackgroundLock
 			FText::FromString(FString::Join(FailedFiles, TEXT("\n"))), FText::FromString(Reason));
 		if (FMessageDialog::Open(EAppMsgType::YesNo, Message) == EAppReturnType::Yes)
 		{
+#if ENGINE_MAJOR_VERSION >= 5
+			// Unload first and reload after, or the next save writes the in-memory change straight back
+			USourceControlHelpers::RevertAndReloadPackages(FailedFiles);
+#else
 			ISourceControlModule::Get().GetProvider().Execute(ISourceControlOperation::Create<FRevert>(), FailedFiles);
+#endif
 		}
 	}
 
@@ -51,24 +58,12 @@ namespace GitBackgroundLock
 		GitSourceControlUtils::RefreshLocks(FGitSourceControlModule::GetEmptyStringArray(), PathToGitRoot, PathToGitBinary, RefreshErrors, RefreshedStates);
 
 		TArray<FString> FailedFiles;
-		for (const FString& AbsoluteFile : ToAbsoluteFilenames(RelativeFiles, PathToGitRoot))
-		{
-			const FGitState* RefreshedState = RefreshedStates.Find(AbsoluteFile);
-			if (RefreshedState && RefreshedState->LockState == ELockState::Locked)
-			{
-				continue;
-			}
-			if (!RefreshedState)
-			{
-				RefreshedStates.Add(AbsoluteFile).LockState = ELockState::NotLocked;
-			}
-			FailedFiles.Add(AbsoluteFile);
-		}
+		TMap<const FString, FGitState> FailureStates = BuildLockFailureStates(RefreshedStates, ToAbsoluteFilenames(RelativeFiles, PathToGitRoot), FailedFiles);
 
 		const FString Reason = FString::Join(ErrorMessages, TEXT("\n"));
-		AsyncTask(ENamedThreads::GameThread, [FailedFiles, Reason, RefreshedStates = MoveTemp(RefreshedStates)]()
+		AsyncTask(ENamedThreads::GameThread, [FailedFiles, Reason, FailureStates = MoveTemp(FailureStates)]()
 		{
-			GitSourceControlUtils::UpdateCachedStates(RefreshedStates);
+			GitSourceControlUtils::UpdateCachedStates(FailureStates);
 			if (FailedFiles.Num() > 0)
 			{
 				AskToRevertUnlockedFiles(FailedFiles, Reason);
@@ -125,6 +120,30 @@ namespace GitBackgroundLock
 			}
 		}
 		return true;
+	}
+
+	TMap<const FString, FGitState> BuildLockFailureStates(const TMap<const FString, FGitState>& InRefreshedLocks, const TArray<FString>& InAbsoluteFiles, TArray<FString>& OutFailedFiles)
+	{
+		TMap<const FString, FGitState> States;
+		for (const FString& AbsoluteFile : InAbsoluteFiles)
+		{
+			const FGitState* Refreshed = InRefreshedLocks.Find(AbsoluteFile);
+			if (Refreshed && Refreshed->LockState == ELockState::Locked)
+			{
+				continue;
+			}
+
+			// Only the lock fields are known here. Defaults elsewhere (Unknown, NotInRepo, UpToDate) would overwrite the
+			// file's real status in the cache, and a revert skips files that no longer look modified.
+			FGitState& State = States.Add(AbsoluteFile);
+			State.FileState = EFileState::Unset;
+			State.TreeState = ETreeState::Unset;
+			State.RemoteState = ERemoteState::Unset;
+			State.LockState = Refreshed && Refreshed->LockState == ELockState::LockedOther ? ELockState::LockedOther : ELockState::NotLocked;
+			State.LockUser = Refreshed ? Refreshed->LockUser : FString();
+			OutFailedFiles.Add(AbsoluteFile);
+		}
+		return States;
 	}
 
 	void LockFiles(const FString& PathToGitRoot, const FString& PathToGitBinary, const TArray<FString>& RelativeFiles)

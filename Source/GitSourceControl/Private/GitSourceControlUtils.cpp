@@ -272,7 +272,7 @@ bool RunCommandInternalRaw(const FString& InCommand, const FString& InPathToGitB
 	const double GitStartTimeSeconds = FPlatformTime::Seconds();
 	FPlatformProcess::ExecProcess(*PathToGitOrEnvBinary, *FullCommand, &ReturnCode, &OutResults, &OutErrors);
 	UE_LOG(LogGitSourceControl, Log, TEXT("[%s] git %s took %.1f ms (return code %d)"), GitSourceControlLog::GetThreadLabel(),
-		*GitSourceControlLog::Truncate(LogableCommand), (FPlatformTime::Seconds() - GitStartTimeSeconds) * 1000.0, ReturnCode);
+		*GitSourceControlLog::Truncate(GitSourceControlLog::RedactUserInfo(LogableCommand)), (FPlatformTime::Seconds() - GitStartTimeSeconds) * 1000.0, ReturnCode);
 	// [END DIVERGENCE]
 
 #if UE_BUILD_DEBUG

@@ -82,19 +82,36 @@ bool ParseCredentialFill(const TArray<FString>& InLines, FString& OutUserName, F
  */
 TMap<FString, FString> ComputeNewerFiles(const FStateResponse& InResponse, const TMap<FString, FString>& InHeadBlobs, const FString& InCurrentRemoteBranch);
 
+/**
+ * False when the answer does not list InBranch (the current branch's remote), for example when the service's mirror has
+ * not fetched it yet. The service drops unknown branch names silently, which would otherwise hide every NotAtHead.
+ * True for an empty InBranch.
+ */
+bool AnswersForBranch(const FStateResponse& InResponse, const FString& InBranch);
+
 /** Stops asking an unreachable service for a while, so a dead service does not cost every status check a connection attempt */
 class FBackoff
 {
 public:
-	explicit FBackoff(double InBackoffSeconds = 30.0);
+	explicit FBackoff(double InBackoffSeconds = 30.0, int32 InTimeoutsBeforeBackoff = 3);
 
 	bool ShouldSkip(double InNowSeconds) const;
 	void RecordConnectionFailure(double InNowSeconds);
+
+	/** One slow answer is not a dead service, but several in a row (a host that drops packets) back off like a refused connection */
+	void RecordTimeout(double InNowSeconds);
+
+	/** True on the second 401 in a row: a fresh credential did not help, so stop sending it */
+	bool RecordUnauthorized();
+
 	void RecordSuccess();
 
 private:
 	double BackoffSeconds;
+	int32 TimeoutsBeforeBackoff;
 	double SkipUntilSeconds = 0.0;
+	int32 ConsecutiveTimeouts = 0;
+	int32 ConsecutiveUnauthorized = 0;
 };
 
 }

@@ -409,9 +409,29 @@ TMap<FString, FString> ComputeNewerFiles(const FStateResponse& InResponse, const
 	return NewerFiles;
 }
 
-FBackoff::FBackoff(const double InBackoffSeconds)
-	: BackoffSeconds(InBackoffSeconds)
+bool AnswersForBranch(const FStateResponse& InResponse, const FString& InBranch)
 {
+	return InBranch.IsEmpty() || InResponse.BranchNames.Contains(InBranch);
+}
+
+FBackoff::FBackoff(const double InBackoffSeconds, const int32 InTimeoutsBeforeBackoff)
+	: BackoffSeconds(InBackoffSeconds)
+	, TimeoutsBeforeBackoff(InTimeoutsBeforeBackoff)
+{
+}
+
+void FBackoff::RecordTimeout(const double InNowSeconds)
+{
+	if (++ConsecutiveTimeouts >= TimeoutsBeforeBackoff)
+	{
+		ConsecutiveTimeouts = 0;
+		SkipUntilSeconds = InNowSeconds + BackoffSeconds;
+	}
+}
+
+bool FBackoff::RecordUnauthorized()
+{
+	return ++ConsecutiveUnauthorized >= 2;
 }
 
 bool FBackoff::ShouldSkip(const double InNowSeconds) const
@@ -427,6 +447,8 @@ void FBackoff::RecordConnectionFailure(const double InNowSeconds)
 void FBackoff::RecordSuccess()
 {
 	SkipUntilSeconds = 0.0;
+	ConsecutiveTimeouts = 0;
+	ConsecutiveUnauthorized = 0;
 }
 
 }
