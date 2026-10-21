@@ -71,6 +71,13 @@ These would make the work a failure even if it technically worked:
 5. **The artist's own forge credential is used**, obtained with `git credential fill` for the `origin` remote's
    host. This reuses whatever Git Credential Manager login the artist already has. GitBranchStateCache requires
    the caller's credential (it holds none of its own and proves access with `git ls-remote`).
+6. **Accepted risk: the credential goes wherever the project config points.** Because the URL is in checked-in
+   config, anyone who can commit to the game repository could point `BranchStateCacheUrl` at their own https host
+   and collect artists' forge credentials. Matt accepted this: commit access to the game repository is already
+   highly trusted. The plugin still refuses plain http from project config, URLs carrying userinfo, and any scheme
+   but https (`IsAllowedStateUrl`). Plain http is allowed only to localhost, and only from the per-user override.
+   Revisit if the game repository's commit access widens, for example by binding the credential to the `origin`
+   host or to a per-user approved host list.
 
 ## Design
 
