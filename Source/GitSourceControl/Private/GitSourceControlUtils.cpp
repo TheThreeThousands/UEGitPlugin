@@ -9,6 +9,10 @@
 #include "GitSourceControlCommand.h"
 #include "GitSourceControlModule.h"
 #include "GitSourceControlProvider.h"
+// [DIVERGENCE]
+#include "GitSourceControlLog.h"
+#include "HAL/PlatformTime.h"
+// [END DIVERGENCE]
 #include "HAL/PlatformProcess.h"
 
 #include "HAL/PlatformFile.h"
@@ -262,7 +266,12 @@ bool RunCommandInternalRaw(const FString& InCommand, const FString& InPathToGitB
 	}
 #endif
 
+	// [DIVERGENCE] Log how long every git process takes, so slow status checks can be diagnosed from the output log
+	const double GitStartTimeSeconds = FPlatformTime::Seconds();
 	FPlatformProcess::ExecProcess(*PathToGitOrEnvBinary, *FullCommand, &ReturnCode, &OutResults, &OutErrors);
+	UE_LOG(LogGitSourceControl, Log, TEXT("[%s] git %s took %.1f ms (return code %d)"), GitSourceControlLog::GetThreadLabel(),
+		*GitSourceControlLog::Truncate(LogableCommand), (FPlatformTime::Seconds() - GitStartTimeSeconds) * 1000.0, ReturnCode);
+	// [END DIVERGENCE]
 
 #if UE_BUILD_DEBUG
 	// TODO: add a setting to easily enable Verbose logging
