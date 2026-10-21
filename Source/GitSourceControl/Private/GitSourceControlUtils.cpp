@@ -13,6 +13,7 @@
 #include "GitSourceControlLog.h"
 #include "HAL/PlatformTime.h"
 #include "Algo/AnyOf.h"
+#include "GitBranchStateCacheClient.h"
 // [END DIVERGENCE]
 #include "HAL/PlatformProcess.h"
 
@@ -1367,6 +1368,16 @@ void ParseStatusResults(const FString& InPathToGitBinary, const FString& InRepos
 	ParseFileStatusResult(InPathToGitBinary, InRepositoryRoot, InUsingLfsLocking, Files, InResults, OutStates);
 }
 
+// [DIVERGENCE] True when any path is an existing directory, i.e. a wholesale refresh rather than a file-level update
+static bool ContainsDirectory(const TArray<FString>& InPaths)
+{
+	return Algo::AnyOf(InPaths, [](const FString& Path)
+	{
+		return FPaths::DirectoryExists(Path);
+	});
+}
+// [END DIVERGENCE]
+
 void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& Files,
 				 TArray<FString>& OutErrorMessages, TMap<FString, FGitSourceControlState>& OutStates)
 {
@@ -1444,6 +1455,51 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	const FString AbsoluteBinariesDirPath = FPaths::Combine(AbsoluteProjectDirPath, "Binaries/");
 	const FString AbsoluteChecksumFilePath = FPaths::Combine(AbsoluteProjectDirPath, ".checksum");
 
+	// [DIVERGENCE] Shared by the local git path below and the GitBranchStateCache path, so both apply the same filtering
+	auto ApplyChangedFiles = [&](const FString& Branch, const TArray<FString>& ChangedRelativeFiles)
+	{
+		const bool bCurrentBranch = bDiffAgainstRemoteCurrent && Branch.Equals(CurrentBranchName);
+		for (const FString& NewerFileName : ChangedRelativeFiles)
+		{
+			const FString& NewerFilePath = FPaths::ConvertRelativePathToFull(InRepositoryRoot, NewerFileName);
+
+			// Don't care about mergeable files (.collection, .ini, .uproject, etc)
+			if (!IsFileLFSLockable(NewerFileName))
+			{
+				// Check if there's newer binaries pending on this branch
+				if (bCurrentBranch && (NewerFilePath == AbsoluteChecksumFilePath || NewerFilePath.StartsWith(AbsoluteBinariesDirPath, ESearchCase::IgnoreCase) ||
+					NewerFilePath.StartsWith(AbsolutePluginsDirPath, ESearchCase::IgnoreCase)))
+				{
+					Provider.bPendingRestart = true;
+				}
+				continue;
+			}
+
+			if (bCurrentBranch || !NewerFiles.Contains(NewerFilePath))
+			{
+				NewerFiles.Add(NewerFilePath, Branch);
+			}
+		}
+	};
+
+	// Ask the service for file level checks, it answers from server side mirrors instead of one git diff per branch here.
+	// Directories (wholesale refreshes) and any failure take the local path below.
+	bool bAnsweredByBranchStateCache = false;
+	if (!ContainsDirectory(Files))
+	{
+		TMap<FString, TArray<FString>> ChangedFilesByBranch;
+		if (GitBranchStateCacheClient::TryGetChangedFilesByBranch(InPathToGitBinary, InRepositoryRoot, Files, BranchesToDiff.Array(),
+																  bDiffAgainstRemoteCurrent ? CurrentBranchName : FString(), ChangedFilesByBranch))
+		{
+			for (const TPair<FString, TArray<FString>>& BranchFiles : ChangedFilesByBranch)
+			{
+				ApplyChangedFiles(BranchFiles.Key, BranchFiles.Value);
+			}
+			bAnsweredByBranchStateCache = true;
+		}
+	}
+	// [END DIVERGENCE]
+
 	TArray<FString> ParametersLog{TEXT("--pretty="), TEXT("--name-only"), TEXT(""), TEXT("--")};
 	for (auto& Branch : BranchesToDiff)
 	{
@@ -1453,24 +1509,18 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	ParametersLog.Add(TEXT("--"));
 
 	bool bResultLog = false;
+	// [DIVERGENCE] No local log or diff when GitBranchStateCache already answered
+	// {
+	if (!bAnsweredByBranchStateCache)
 	{
+	// [END DIVERGENCE]
 		TRACE_CPUPROFILER_EVENT_SCOPE_TEXT("GitSourceControlUtils::CheckRemote Log %s");
 		bResultLog = RunCommand(TEXT("log"), InPathToGitBinary, InRepositoryRoot, ParametersLog, Files, LogResults, ErrorMessages);
-	}	
+	}
 
 	for (auto& Branch : BranchesToDiff)
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*FString::Printf(TEXT("GitSourceControlUtils::CheckRemote %s"), *Branch));
-
-		bool bCurrentBranch;
-		if (bDiffAgainstRemoteCurrent && Branch.Equals(CurrentBranchName))
-		{
-			bCurrentBranch = true;
-		}
-		else
-		{
-			bCurrentBranch = false;
-		}
 
 		if (bResultLog)
 		{
@@ -1498,27 +1548,9 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 				Intersection = LogResults;
 			}
 
-			for (const FString& NewerFileName : Intersection)
-			{
-				const FString& NewerFilePath = FPaths::ConvertRelativePathToFull(InRepositoryRoot, NewerFileName);
-
-				// Don't care about mergeable files (.collection, .ini, .uproject, etc)
-				if (!IsFileLFSLockable(NewerFileName))
-				{
-					// Check if there's newer binaries pending on this branch
-					if (bCurrentBranch && (NewerFilePath == AbsoluteChecksumFilePath || NewerFilePath.StartsWith(AbsoluteBinariesDirPath, ESearchCase::IgnoreCase) ||
-						NewerFilePath.StartsWith(AbsolutePluginsDirPath, ESearchCase::IgnoreCase)))
-					{
-						Provider.bPendingRestart = true;
-					}
-					continue;
-				}
-
-				if (bCurrentBranch || !NewerFiles.Contains(NewerFilePath))
-				{
-					NewerFiles.Add(NewerFilePath, Branch);
-				}
-			}
+			// [DIVERGENCE] The per file filtering moved into ApplyChangedFiles above
+			ApplyChangedFiles(Branch, Intersection);
+			// [END DIVERGENCE]
 		}
 		DiffResults.Reset();
 		Intersection.Reset();
@@ -1716,16 +1748,6 @@ bool UpdateChangelistStateByCommand()
 	return true;
 }
 #endif
-
-// [DIVERGENCE] True when any path is an existing directory, i.e. a wholesale refresh rather than a file-level update
-static bool ContainsDirectory(const TArray<FString>& InPaths)
-{
-	return Algo::AnyOf(InPaths, [](const FString& Path)
-	{
-		return FPaths::DirectoryExists(Path);
-	});
-}
-// [END DIVERGENCE]
 
 // Run a batch of Git "status" command to update status of given files and/or directories.
 bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const bool InUsingLfsLocking, const TArray<FString>& InFiles,
