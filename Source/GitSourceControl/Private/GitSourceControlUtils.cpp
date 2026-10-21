@@ -12,6 +12,7 @@
 // [DIVERGENCE]
 #include "GitSourceControlLog.h"
 #include "HAL/PlatformTime.h"
+#include "Algo/AnyOf.h"
 // [END DIVERGENCE]
 #include "HAL/PlatformProcess.h"
 
@@ -1715,7 +1716,17 @@ bool UpdateChangelistStateByCommand()
 	return true;
 }
 #endif
-	
+
+// [DIVERGENCE] True when any path is an existing directory, i.e. a wholesale refresh rather than a file-level update
+static bool ContainsDirectory(const TArray<FString>& InPaths)
+{
+	return Algo::AnyOf(InPaths, [](const FString& Path)
+	{
+		return FPaths::DirectoryExists(Path);
+	});
+}
+// [END DIVERGENCE]
+
 // Run a batch of Git "status" command to update status of given files and/or directories.
 bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const bool InUsingLfsLocking, const TArray<FString>& InFiles,
 					 TArray<FString>& OutErrorMessages, TMap<FString, FGitSourceControlState>& OutStates)
@@ -1758,7 +1769,15 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
 	}
 
 #if ENGINE_MAJOR_VERSION == 5
-	UpdateChangelistStateByCommand();
+	// [DIVERGENCE] Rebuilding the changelists scans all of Content/, which is too slow to do for every single file update.
+	// Changelists are disabled in this fork (TECH-296), and directory (full) refreshes still rebuild them.
+	// UpdateChangelistStateByCommand();
+	if (ContainsDirectory(RepoFiles))
+	{
+		FGitScopedLogTimer ChangelistTimer(TEXT("UpdateChangelistStateByCommand"));
+		UpdateChangelistStateByCommand();
+	}
+	// [END DIVERGENCE]
 #endif
 
 	// If the only files being touched are ones which we have checked out already, don't bother updating the remote status, we don't care, because the status can't have changed underneath us
