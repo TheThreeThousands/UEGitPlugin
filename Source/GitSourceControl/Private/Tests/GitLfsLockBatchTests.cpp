@@ -162,6 +162,41 @@ bool FGitLfsLockBatchTimeoutTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitLfsLockBatchChunksTest, "GitSourceControl.LfsLockBatch.Chunks.StayUnderServerLimit", GIT_LFS_LOCK_BATCH_TEST_FLAGS)
+bool FGitLfsLockBatchChunksTest::RunTest(const FString& Parameters)
+{
+	TArray<FString> Paths;
+	for (int32 Index = 0; Index < 1201; ++Index)
+	{
+		Paths.Add(FString::Printf(TEXT("Content/__ExternalActors__/A%d.uasset"), Index));
+	}
+
+	const TArray<TArray<FString>> Chunks = SplitIntoChunks(Paths);
+	if (!TestEqual(TEXT("chunk count"), Chunks.Num(), 3))
+	{
+		return false;
+	}
+	TestEqual(TEXT("first chunk"), Chunks[0].Num(), 500);
+	TestEqual(TEXT("second chunk"), Chunks[1].Num(), 500);
+	TestEqual(TEXT("last chunk"), Chunks[2].Num(), 201);
+	TestEqual(TEXT("order kept"), Chunks[2].Last(), Paths.Last());
+	TestEqual(TEXT("empty input"), SplitIntoChunks(TArray<FString>()).Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitLfsLockBatchUnknownTest, "GitSourceControl.LfsLockBatch.Unknown.OnlyWhatIsLeft", GIT_LFS_LOCK_BATCH_TEST_FLAGS)
+bool FGitLfsLockBatchUnknownTest::RunTest(const FString& Parameters)
+{
+	const TArray<FString> Requested{ TEXT("A.uasset"), TEXT("B.uasset"), TEXT("C.uasset") };
+	const TSet<FString> HeldByMe{ TEXT("a.uasset"), TEXT("C.uasset"), TEXT("Z.uasset") };
+
+	// A timed out batch may have locked some files already; git lfs lock would report those as failures
+	TestEqual(TEXT("lock what is not yet held"), RemainingAfterUnknownOutcome(EOperation::Lock, Requested, HeldByMe), TArray<FString>{ TEXT("B.uasset") });
+	// and git lfs unlock would fail on files the batch already released
+	TestEqual(TEXT("unlock what is still held"), RemainingAfterUnknownOutcome(EOperation::Unlock, Requested, HeldByMe), TArray<FString>{ TEXT("A.uasset"), TEXT("C.uasset") });
+	return true;
+}
+
 #undef GIT_LFS_LOCK_BATCH_TEST_FLAGS
 
 #endif

@@ -48,6 +48,19 @@ bool ParseLfsEnvEndpoint(const TArray<FString>& InLines, FString& OutUrl);
  */
 FString RemoteRefName(const FString& InUpstreamFullName, const FString& InCurrentBranch);
 
+/** GitLfsCache refuses a request carrying more than Locks:MaxFanOutPaths (1000 by default), so large batches go in chunks */
+constexpr int32 MaxPathsPerRequest = 500;
+
+/** InPaths in order, at most MaxPathsPerRequest per chunk */
+TArray<TArray<FString>> SplitIntoChunks(const TArray<FString>& InPaths);
+
+/**
+ * After a batch was sent but never answered (a timeout), some of its locks may already be granted or released. Returns
+ * the requested paths the stock git lfs command still has to handle, given the paths the user holds locks on now:
+ * for a lock the ones not held, for an unlock the ones still held. Paths compare without case, as git-lfs on Windows does.
+ */
+TArray<FString> RemainingAfterUnknownOutcome(EOperation InOperation, const TArray<FString>& InRequestedPaths, const TSet<FString>& InPathsHeldByUser);
+
 /** Each path is one upstream call, fanned out under a rate limiter, so the wait grows with the batch: 2 s + 50 ms a path, at most 60 s */
 float TimeoutSeconds(int32 InPathCount);
 

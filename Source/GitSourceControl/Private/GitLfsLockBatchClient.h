@@ -4,20 +4,29 @@
 #include "GitLfsLockBatch.h"
 
 /**
- * Locks or unlocks many files in one request through ktsu.GitLfsCache's locks/batch extension, at the LFS endpoint git-lfs
- * itself uses. Every failure to get an answer returns false so the caller runs the stock git lfs command instead.
+ * Locks or unlocks many files per request through ktsu.GitLfsCache's locks/batch extension, at the LFS endpoint git-lfs
+ * itself uses. Paths it could not get an answer for are handed back so the caller can run the stock git lfs command.
  */
 namespace GitLfsLockBatchClient
 {
 
-/**
- * True when GitLfsCache answered for every path in OutResults (some items may still have failed, which is final).
- * False when it was not asked or did not answer, and nothing is known about the paths.
- */
-bool TryRun(GitLfsLockBatch::EOperation InOperation, const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& InRelativeFiles,
-			TArray<GitLfsLockBatch::FItemResult>& OutResults);
+/** Where each requested path ended up */
+struct FOutcome
+{
+	/** GitLfsCache answered for these, which is final even for failed items */
+	TArray<GitLfsLockBatch::FItemResult> Answered;
 
-/** False when lfs.setlockablereadonly is false, i.e. git-lfs would leave an unlocked file writable. Only valid after TryRun. */
+	/** Never reached GitLfsCache (not configured, unreachable, refused as a whole): the stock git lfs command handles them */
+	TArray<FString> NotAsked;
+
+	/** Sent but not answered (a timeout): upstream may already have locked or unlocked some of them */
+	TArray<FString> Unknown;
+};
+
+/** Sends InRelativeFiles to GitLfsCache's locks/batch in chunks, and reports which paths it answered for */
+void Run(GitLfsLockBatch::EOperation InOperation, const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& InRelativeFiles, FOutcome& OutOutcome);
+
+/** False when lfs.setlockablereadonly is false, i.e. git-lfs would leave an unlocked file writable. Only valid after Run. */
 bool SetsLockableReadOnly();
 
 }

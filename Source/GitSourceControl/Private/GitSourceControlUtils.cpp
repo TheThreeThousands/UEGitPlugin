@@ -889,32 +889,76 @@ bool RunLFSCommand(const FString& InCommand, const FString& InRepositoryRoot, co
 // [DIVERGENCE]
 bool RunLfsLockOperation(const bool bInLock, const FString& InRepositoryRoot, const FString& InPathToGitBinary, const TArray<FString>& InRelativeFiles, TArray<FString>& OutInfoMessages, TArray<FString>& OutErrorMessages)
 {
-	TArray<GitLfsLockBatch::FItemResult> Results;
 	const GitLfsLockBatch::EOperation Operation = bInLock ? GitLfsLockBatch::EOperation::Lock : GitLfsLockBatch::EOperation::Unlock;
-	if (!GitLfsLockBatchClient::TryRun(Operation, InPathToGitBinary, InRepositoryRoot, InRelativeFiles, Results))
-	{
-		return RunLFSCommand(bInLock ? TEXT("lock") : TEXT("unlock"), InRepositoryRoot, InPathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), InRelativeFiles, OutInfoMessages, OutErrorMessages);
-	}
+	GitLfsLockBatchClient::FOutcome Outcome;
+	GitLfsLockBatchClient::Run(Operation, InPathToGitBinary, InRepositoryRoot, InRelativeFiles, Outcome);
 
 	// git lfs lock makes a lockable file writable and git lfs unlock makes it read only again, so do what it would have done
 	const bool bMakeReadOnlyOnUnlock = GitLfsLockBatchClient::SetsLockableReadOnly();
 	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-	bool bAllSucceeded = true;
-	for (const GitLfsLockBatch::FItemResult& Result : Results)
+	auto ApplySucceeded = [&](const FString& RelativeFile)
 	{
-		if (!Result.bOk)
-		{
-			bAllSucceeded = false;
-			OutErrorMessages.Add(FString::Printf(TEXT("%s: %s"), *Result.Path, *Result.Message));
-			continue;
-		}
-
-		const FString AbsoluteFile = FPaths::Combine(InRepositoryRoot, Result.Path);
-		if (PlatformFile.FileExists(*AbsoluteFile) && (bInLock || (bMakeReadOnlyOnUnlock && IsFileLFSLockable(Result.Path))))
+		const FString AbsoluteFile = FPaths::Combine(InRepositoryRoot, RelativeFile);
+		if (PlatformFile.FileExists(*AbsoluteFile) && (bInLock || (bMakeReadOnlyOnUnlock && IsFileLFSLockable(RelativeFile))))
 		{
 			PlatformFile.SetReadOnly(*AbsoluteFile, !bInLock);
 		}
-		OutInfoMessages.Add(FString::Printf(TEXT("%s %s"), bInLock ? TEXT("Locked") : TEXT("Unlocked"), *Result.Path));
+		OutInfoMessages.Add(FString::Printf(TEXT("%s %s"), bInLock ? TEXT("Locked") : TEXT("Unlocked"), *RelativeFile));
+	};
+
+	bool bAllSucceeded = true;
+	for (const GitLfsLockBatch::FItemResult& Result : Outcome.Answered)
+	{
+		if (Result.bOk)
+		{
+			ApplySucceeded(Result.Path);
+		}
+		else
+		{
+			bAllSucceeded = false;
+			OutErrorMessages.Add(FString::Printf(TEXT("%s: %s"), *Result.Path, *Result.Message));
+		}
+	}
+
+	TArray<FString> StockFiles = MoveTemp(Outcome.NotAsked);
+	if (Outcome.Unknown.Num() > 0)
+	{
+		// A batch that timed out may have been carried out in part, and git lfs fails on locks it finds already taken or
+		// already released, so ask who holds what and leave the stock command only what is still to do
+		TArray<FString> Locks;
+		TArray<FString> ListErrors;
+		const FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
+		if (GitSourceControl && RunLFSCommand(TEXT("locks"), InRepositoryRoot, InPathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), FGitSourceControlModule::GetEmptyStringArray(), Locks, ListErrors))
+		{
+			const FString LockUser = GitSourceControl->GetProvider().GetLockUser();
+			TSet<FString> HeldByUser;
+			for (const FString& Lock : Locks)
+			{
+				const FGitLfsLocksParser LockInfo(InRepositoryRoot, Lock, false);
+				if (LockInfo.LockUser == LockUser)
+				{
+					HeldByUser.Add(LockInfo.LocalFilename);
+				}
+			}
+			const TArray<FString> Remaining = GitLfsLockBatch::RemainingAfterUnknownOutcome(Operation, Outcome.Unknown, HeldByUser);
+			for (const FString& RelativeFile : Outcome.Unknown)
+			{
+				if (!Remaining.Contains(RelativeFile))
+				{
+					ApplySucceeded(RelativeFile);
+				}
+			}
+			StockFiles.Append(Remaining);
+		}
+		else
+		{
+			StockFiles.Append(Outcome.Unknown);
+		}
+	}
+
+	if (StockFiles.Num() > 0)
+	{
+		bAllSucceeded &= RunLFSCommand(bInLock ? TEXT("lock") : TEXT("unlock"), InRepositoryRoot, InPathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), StockFiles, OutInfoMessages, OutErrorMessages);
 	}
 	return bAllSucceeded;
 }

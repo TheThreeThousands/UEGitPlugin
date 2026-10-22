@@ -145,6 +145,27 @@ FString RemoteRefName(const FString& InUpstreamFullName, const FString& InCurren
 	return CurrentBranch.IsEmpty() ? FString() : TEXT("refs/heads/") + CurrentBranch;
 }
 
+TArray<TArray<FString>> SplitIntoChunks(const TArray<FString>& InPaths)
+{
+	TArray<TArray<FString>> Chunks;
+	for (int32 Start = 0; Start < InPaths.Num(); Start += MaxPathsPerRequest)
+	{
+		const int32 Count = FMath::Min(MaxPathsPerRequest, InPaths.Num() - Start);
+		Chunks.Emplace(InPaths.GetData() + Start, Count);
+	}
+	return Chunks;
+}
+
+TArray<FString> RemainingAfterUnknownOutcome(const EOperation InOperation, const TArray<FString>& InRequestedPaths, const TSet<FString>& InPathsHeldByUser)
+{
+	// FString hashing and equality ignore case
+	return InRequestedPaths.FilterByPredicate([InOperation, &InPathsHeldByUser](const FString& Path)
+	{
+		const bool bHeld = InPathsHeldByUser.Contains(Path);
+		return InOperation == EOperation::Lock ? !bHeld : bHeld;
+	});
+}
+
 float TimeoutSeconds(const int32 InPathCount)
 {
 	return FMath::Min(60.0f, 2.0f + 0.05f * FMath::Max(0, InPathCount));

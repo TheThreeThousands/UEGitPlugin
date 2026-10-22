@@ -112,15 +112,84 @@ namespace
 		CachedUserName.Empty();
 		CachedPassword.Empty();
 	}
+
+	enum class EChunkOutcome : uint8
+	{
+		Answered,
+		NotAsked,
+		Unknown,
+	};
+
+	/** Sends one chunk. Without a well-formed answer, the outcome says whether upstream may have acted on it anyway. */
+	EChunkOutcome PostChunk(const FString& InBatchUrl, const FString& InAuthorization, const GitLfsLockBatch::EOperation InOperation, const TArray<FString>& InChunk,
+							const FString& InRef, TArray<GitLfsLockBatch::FItemResult>& OutResults)
+	{
+		const FString Body = GitLfsLockBatch::BuildBody(InOperation, InChunk, InRef);
+		const GitServiceHttp::FPostResult Post = GitServiceHttp::PostJson(InBatchUrl, InAuthorization, Body, GitLfsLockBatch::TimeoutSeconds(InChunk.Num()));
+		if (!Post.bResponded)
+		{
+			{
+				FScopeLock Lock(&StateCriticalSection);
+				if (Post.bConnectionFailure)
+				{
+					Backoff.RecordConnectionFailure(FPlatformTime::Seconds());
+				}
+				else if (Post.bTimedOut)
+				{
+					Backoff.RecordTimeout(FPlatformTime::Seconds());
+				}
+			}
+			LogFallbackOnce(FString::Printf(TEXT("%s: %s"), *GitBranchStateCache::StripUserInfo(InBatchUrl), *Post.Error));
+			// A refused connection never reached GitLfsCache, but a request that timed out may already have been fanned out
+			return Post.bConnectionFailure ? EChunkOutcome::NotAsked : EChunkOutcome::Unknown;
+		}
+
+		if (Post.ResponseCode == 404)
+		{
+			// No such route: lfs.url is not GitLfsCache, or its locking is switched off
+			DisableForSession(FString::Printf(TEXT("%s answered HTTP 404"), *GitBranchStateCache::StripUserInfo(InBatchUrl)));
+			return EChunkOutcome::NotAsked;
+		}
+		if (Post.ResponseCode == 401)
+		{
+			ForgetCredential();
+			bool bGiveUp = false;
+			{
+				FScopeLock Lock(&StateCriticalSection);
+				bGiveUp = Backoff.RecordUnauthorized();
+				bDisabledForSession |= bGiveUp;
+			}
+			if (bGiveUp)
+			{
+				LogFallbackOnce(FString::Printf(TEXT("%s refused the stored credential twice, disabled for this session"), *GitBranchStateCache::StripUserInfo(InBatchUrl)));
+			}
+		}
+		if (Post.ResponseCode != 200)
+		{
+			// Refused as a whole (bad request, too many paths, credential), so no item was attempted
+			LogFallbackOnce(FString::Printf(TEXT("%s answered HTTP %d"), *GitBranchStateCache::StripUserInfo(InBatchUrl), Post.ResponseCode));
+			return EChunkOutcome::NotAsked;
+		}
+
+		FString Error;
+		if (!GitLfsLockBatch::ParseResponse(Post.Body, InChunk, OutResults, Error))
+		{
+			// Not GitLfsCache, which would have answered this route with results; it will answer the same way every time
+			DisableForSession(FString::Printf(TEXT("%s is not a locks/batch answer: %s"), *GitBranchStateCache::StripUserInfo(InBatchUrl), *Error));
+			return EChunkOutcome::NotAsked;
+		}
+		return EChunkOutcome::Answered;
+	}
 }
 
-bool TryRun(const GitLfsLockBatch::EOperation InOperation, const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& InRelativeFiles,
-			TArray<GitLfsLockBatch::FItemResult>& OutResults)
+void Run(const GitLfsLockBatch::EOperation InOperation, const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& InRelativeFiles, FOutcome& OutOutcome)
 {
+	OutOutcome = FOutcome();
 	if (InRelativeFiles.Num() == 0)
 	{
-		return false;
+		return;
 	}
+	OutOutcome.NotAsked = InRelativeFiles;
 
 	const TCHAR* const OperationName = InOperation == GitLfsLockBatch::EOperation::Lock ? TEXT("lock") : TEXT("unlock");
 	FGitScopedLogTimer Timer(FString::Printf(TEXT("GitLfsCache locks/batch %s (%d files)"), OperationName, InRelativeFiles.Num()));
@@ -131,12 +200,12 @@ bool TryRun(const GitLfsLockBatch::EOperation InOperation, const FString& InPath
 		if (bDisabledForSession)
 		{
 			Timer.SetOutcome(TEXT("disabled for this session"));
-			return false;
+			return;
 		}
 		if (Backoff.ShouldSkip(FPlatformTime::Seconds()))
 		{
 			Timer.SetOutcome(TEXT("skipped, service recently unreachable"));
-			return false;
+			return;
 		}
 		bNeedsDiscovery = !bDiscovered;
 	}
@@ -161,7 +230,7 @@ bool TryRun(const GitLfsLockBatch::EOperation InOperation, const FString& InPath
 	{
 		DisableForSession(FString::Printf(TEXT("LFS endpoint is not https (%s)"), *GitBranchStateCache::StripUserInfo(Url)));
 		Timer.SetOutcome(TEXT("endpoint not usable"));
-		return false;
+		return;
 	}
 	if (bPlainHttp)
 	{
@@ -174,78 +243,45 @@ bool TryRun(const GitLfsLockBatch::EOperation InOperation, const FString& InPath
 	{
 		DisableForSession(FString::Printf(TEXT("no stored git credential for %s"), *Remote.Host));
 		Timer.SetOutcome(TEXT("no credential"));
-		return false;
+		return;
 	}
 
 	const FString BatchUrl = Url + TEXT("/locks/batch");
-	const FString Body = GitLfsLockBatch::BuildBody(InOperation, InRelativeFiles, Ref);
-	const GitServiceHttp::FPostResult Post = GitServiceHttp::PostJson(BatchUrl, GitServiceHttp::BasicAuthorization(UserName, Password), Body, GitLfsLockBatch::TimeoutSeconds(InRelativeFiles.Num()));
-	if (!Post.bResponded)
-	{
-		{
-			FScopeLock Lock(&StateCriticalSection);
-			if (Post.bConnectionFailure)
-			{
-				Backoff.RecordConnectionFailure(FPlatformTime::Seconds());
-			}
-			else if (Post.bTimedOut)
-			{
-				Backoff.RecordTimeout(FPlatformTime::Seconds());
-			}
-		}
-		LogFallbackOnce(FString::Printf(TEXT("%s: %s"), *GitBranchStateCache::StripUserInfo(BatchUrl), *Post.Error));
-		Timer.SetOutcome(Post.Error);
-		return false;
-	}
+	const FString Authorization = GitServiceHttp::BasicAuthorization(UserName, Password);
+	OutOutcome.NotAsked.Reset();
 
-	if (Post.ResponseCode == 404)
+	// Chunks stay under GitLfsCache's per request limit. After the first chunk without an answer, the rest are not sent.
+	const TArray<TArray<FString>> Chunks = GitLfsLockBatch::SplitIntoChunks(InRelativeFiles);
+	for (int32 ChunkIndex = 0; ChunkIndex < Chunks.Num(); ++ChunkIndex)
 	{
-		// No such route: lfs.url is not GitLfsCache, or its locking is switched off
-		DisableForSession(FString::Printf(TEXT("%s answered HTTP 404"), *GitBranchStateCache::StripUserInfo(BatchUrl)));
-		Timer.SetOutcome(TEXT("HTTP 404"));
-		return false;
-	}
-	if (Post.ResponseCode == 401)
-	{
-		ForgetCredential();
-		bool bGiveUp = false;
+		TArray<GitLfsLockBatch::FItemResult> ChunkResults;
+		const EChunkOutcome ChunkOutcome = PostChunk(BatchUrl, Authorization, InOperation, Chunks[ChunkIndex], Ref, ChunkResults);
+		if (ChunkOutcome == EChunkOutcome::Answered)
 		{
-			FScopeLock Lock(&StateCriticalSection);
-			bGiveUp = Backoff.RecordUnauthorized();
-			bDisabledForSession |= bGiveUp;
+			OutOutcome.Answered.Append(MoveTemp(ChunkResults));
+			continue;
 		}
-		if (bGiveUp)
-		{
-			LogFallbackOnce(FString::Printf(TEXT("%s refused the stored credential twice, disabled for this session"), *GitBranchStateCache::StripUserInfo(BatchUrl)));
-		}
-	}
-	if (Post.ResponseCode != 200)
-	{
-		LogFallbackOnce(FString::Printf(TEXT("%s answered HTTP %d"), *GitBranchStateCache::StripUserInfo(BatchUrl), Post.ResponseCode));
-		Timer.SetOutcome(FString::Printf(TEXT("HTTP %d"), Post.ResponseCode));
-		return false;
-	}
 
-	FString Error;
-	if (!GitLfsLockBatch::ParseResponse(Post.Body, InRelativeFiles, OutResults, Error))
-	{
-		DisableForSession(FString::Printf(TEXT("%s is not a locks/batch answer: %s"), *GitBranchStateCache::StripUserInfo(BatchUrl), *Error));
-		Timer.SetOutcome(Error);
-		return false;
+		(ChunkOutcome == EChunkOutcome::Unknown ? OutOutcome.Unknown : OutOutcome.NotAsked).Append(Chunks[ChunkIndex]);
+		for (int32 Remaining = ChunkIndex + 1; Remaining < Chunks.Num(); ++Remaining)
+		{
+			OutOutcome.NotAsked.Append(Chunks[Remaining]);
+		}
+		break;
 	}
 
 	int32 Succeeded = 0;
-	for (const GitLfsLockBatch::FItemResult& Result : OutResults)
+	for (const GitLfsLockBatch::FItemResult& Result : OutOutcome.Answered)
 	{
 		Succeeded += Result.bOk ? 1 : 0;
 	}
+	if (OutOutcome.Answered.Num() > 0)
 	{
 		FScopeLock Lock(&StateCriticalSection);
 		Backoff.RecordSuccess();
 		LoggedReasons.Reset();
 	}
-	Timer.SetOutcome(FString::Printf(TEXT("%d of %d succeeded"), Succeeded, OutResults.Num()));
-	return true;
+	Timer.SetOutcome(FString::Printf(TEXT("%d of %d answered succeeded, %d unanswered, %d not sent"), Succeeded, OutOutcome.Answered.Num(), OutOutcome.Unknown.Num(), OutOutcome.NotAsked.Num()));
 }
 
 bool SetsLockableReadOnly()
