@@ -341,6 +341,14 @@ void RemoveRedundantErrors(FGitSourceControlCommand& InCommand, const FString& I
 
 bool RunLFSCommand(const FString& InCommand, const FString& InRepositoryRoot, const FString& GitBinaryFallback, const TArray<FString>& InParameters, const TArray<FString>& InFiles, TArray<FString>& OutResults, TArray<FString>& OutErrorMessages);
 
+// [DIVERGENCE]
+/**
+ * Locks or unlocks files in one request through GitLfsCache's locks/batch when the LFS endpoint offers it, else runs
+ * git lfs lock / unlock as before. True only when every file succeeded, like the git lfs command.
+ */
+bool RunLfsLockOperation(bool bInLock, const FString& InRepositoryRoot, const FString& InPathToGitBinary, const TArray<FString>& InRelativeFiles, TArray<FString>& OutInfoMessages, TArray<FString>& OutErrorMessages);
+// [END DIVERGENCE]
+
 /**
  * Helper function for various commands to update cached states.
  * @returns true if any states were updated

@@ -14,6 +14,7 @@
 #include "HAL/PlatformTime.h"
 #include "Algo/AnyOf.h"
 #include "GitBranchStateCacheClient.h"
+#include "GitLfsLockBatchClient.h"
 // [END DIVERGENCE]
 #include "HAL/PlatformProcess.h"
 
@@ -884,6 +885,40 @@ bool RunLFSCommand(const FString& InCommand, const FString& InRepositoryRoot, co
 
 	return GitSourceControlUtils::RunCommand(Command, LFSLockBinary, InRepositoryRoot, InParameters, InFiles, OutResults, OutErrorMessages);
 }
+
+// [DIVERGENCE]
+bool RunLfsLockOperation(const bool bInLock, const FString& InRepositoryRoot, const FString& InPathToGitBinary, const TArray<FString>& InRelativeFiles, TArray<FString>& OutInfoMessages, TArray<FString>& OutErrorMessages)
+{
+	TArray<GitLfsLockBatch::FItemResult> Results;
+	const GitLfsLockBatch::EOperation Operation = bInLock ? GitLfsLockBatch::EOperation::Lock : GitLfsLockBatch::EOperation::Unlock;
+	if (!GitLfsLockBatchClient::TryRun(Operation, InPathToGitBinary, InRepositoryRoot, InRelativeFiles, Results))
+	{
+		return RunLFSCommand(bInLock ? TEXT("lock") : TEXT("unlock"), InRepositoryRoot, InPathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), InRelativeFiles, OutInfoMessages, OutErrorMessages);
+	}
+
+	// git lfs lock makes a lockable file writable and git lfs unlock makes it read only again, so do what it would have done
+	const bool bMakeReadOnlyOnUnlock = GitLfsLockBatchClient::SetsLockableReadOnly();
+	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+	bool bAllSucceeded = true;
+	for (const GitLfsLockBatch::FItemResult& Result : Results)
+	{
+		if (!Result.bOk)
+		{
+			bAllSucceeded = false;
+			OutErrorMessages.Add(FString::Printf(TEXT("%s: %s"), *Result.Path, *Result.Message));
+			continue;
+		}
+
+		const FString AbsoluteFile = FPaths::Combine(InRepositoryRoot, Result.Path);
+		if (PlatformFile.FileExists(*AbsoluteFile) && (bInLock || (bMakeReadOnlyOnUnlock && IsFileLFSLockable(Result.Path))))
+		{
+			PlatformFile.SetReadOnly(*AbsoluteFile, !bInLock);
+		}
+		OutInfoMessages.Add(FString::Printf(TEXT("%s %s"), bInLock ? TEXT("Locked") : TEXT("Unlocked"), *Result.Path));
+	}
+	return bAllSucceeded;
+}
+// [END DIVERGENCE]
 
 // Run a Git "commit" command by batches
 bool RunCommit(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& InParameters, const TArray<FString>& InFiles,
@@ -2289,6 +2324,13 @@ bool UpdateCachedStates(const TMap<const FString, FGitState>& InResults)
 		{
 			State->State.LockState = NewState.LockState;
 			State->State.LockUser = NewState.LockUser;
+			// [DIVERGENCE] git-lfs's hooks only know locks taken through git lfs lock, so after a sync they can make a file
+			// locked through GitLfsCache's locks/batch read only again. Our lock means it is ours to edit.
+			if (NewState.LockState == ELockState::Locked && FPaths::FileExists(State->GetFilename()))
+			{
+				FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*State->GetFilename(), false);
+			}
+			// [END DIVERGENCE]
 		}
 		if (NewState.RemoteState != ERemoteState::Unset)
 		{

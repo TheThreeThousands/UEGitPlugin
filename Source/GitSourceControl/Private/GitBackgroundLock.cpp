@@ -152,7 +152,7 @@ namespace GitBackgroundLock
 		{
 			TArray<FString> InfoMessages;
 			TArray<FString> ErrorMessages;
-			const bool bLocked = GitSourceControlUtils::RunLFSCommand(TEXT("lock"), PathToGitRoot, PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), RelativeFiles, InfoMessages, ErrorMessages);
+			const bool bLocked = GitSourceControlUtils::RunLfsLockOperation(true, PathToGitRoot, PathToGitBinary, RelativeFiles, InfoMessages, ErrorMessages);
 			UE_LOG(LogGitSourceControl, Log, TEXT("[%s] Background lock of %d files %s"), GitSourceControlLog::GetThreadLabel(), RelativeFiles.Num(), bLocked ? TEXT("succeeded") : TEXT("failed"));
 			if (!bLocked)
 			{

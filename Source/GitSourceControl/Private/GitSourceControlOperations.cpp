@@ -178,7 +178,7 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 	{
 		UE_LOG(LogGitSourceControl, Log, TEXT("[%s] Locking %d files and waiting: %s"), GitSourceControlLog::GetThreadLabel(), LockableRelativeFiles.Num(), *BlockingLockReason);
 	}
-	const bool bSuccess = bLockInBackground || GitSourceControlUtils::RunLFSCommand(TEXT("lock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), LockableRelativeFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+	const bool bSuccess = bLockInBackground || GitSourceControlUtils::RunLfsLockOperation(true, InCommand.PathToGitRoot, InCommand.PathToGitBinary, LockableRelativeFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 	// [END DIVERGENCE]
 	InCommand.bCommandSuccessful = bSuccess;
 	const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
@@ -428,9 +428,13 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 					if (FilesToUnlock.Num() > 0)
 					{
 						// Not strictly necessary to succeed, so don't update command success
-						const bool bUnlockSuccess = GitSourceControlUtils::RunLFSCommand(TEXT("unlock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary,
-							FGitSourceControlModule::GetEmptyStringArray(), FilesToUnlock,
+						// [DIVERGENCE] One request for every file through GitLfsCache when it offers locks/batch
+						// const bool bUnlockSuccess = GitSourceControlUtils::RunLFSCommand(TEXT("unlock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary,
+						// 	FGitSourceControlModule::GetEmptyStringArray(), FilesToUnlock,
+						// 	InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+						const bool bUnlockSuccess = GitSourceControlUtils::RunLfsLockOperation(false, InCommand.PathToGitRoot, InCommand.PathToGitBinary, FilesToUnlock,
 							InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+						// [END DIVERGENCE]
 
 						if (!bUnlockSuccess)
 						{
@@ -663,8 +667,12 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 			// TODO: Can we actually run "unlock" on multiple files in one command?
 			// This seems like a bug
 			const TArray<FString>& RelativeFiles = GitSourceControlUtils::RelativeFilenames(LockedFiles, InCommand.PathToGitRoot);
-			InCommand.bCommandSuccessful &= GitSourceControlUtils::RunLFSCommand(TEXT("unlock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), RelativeFiles,
-																				 InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+			// [DIVERGENCE] One request for every file through GitLfsCache when it offers locks/batch
+			// InCommand.bCommandSuccessful &= GitSourceControlUtils::RunLFSCommand(TEXT("unlock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), RelativeFiles,
+			// 																	 InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+			InCommand.bCommandSuccessful &= GitSourceControlUtils::RunLfsLockOperation(false, InCommand.PathToGitRoot, InCommand.PathToGitBinary, RelativeFiles,
+																					   InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+			// [END DIVERGENCE]
 			if (InCommand.bCommandSuccessful)
 			{
 				for (const FString& AboluteFile : LockedFiles)
