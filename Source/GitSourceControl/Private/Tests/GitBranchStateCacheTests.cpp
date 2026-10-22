@@ -61,6 +61,39 @@ bool FGitBranchStateCacheRequestBodyTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitBranchStateCacheRequestBodyWithoutPathsTest, "GitSourceControl.BranchStateCache.Request.BodyWithoutPaths", GIT_BRANCH_STATE_TEST_FLAGS)
+bool FGitBranchStateCacheRequestBodyWithoutPathsTest::RunTest(const FString& Parameters)
+{
+	const FString Body = BuildStateRequestBody(TEXT("abc"), { TEXT("origin/main") }, { TEXT("Content") }, false);
+
+	TSharedPtr<FJsonObject> Root;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Body);
+	if (!TestTrue(TEXT("Body is JSON"), FJsonSerializer::Deserialize(Reader, Root) && Root.IsValid()))
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("base"), Root->GetStringField(TEXT("base")), FString(TEXT("abc")));
+	TestTrue(TEXT("branchPatterns present"), Root->HasField(TEXT("branchPatterns")));
+	// An empty list would ask about no paths at all; only a missing field asks about every changed path
+	TestFalse(TEXT("paths omitted"), Root->HasField(TEXT("paths")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitBranchStateCacheWholeTreeFilterTest, "GitSourceControl.BranchStateCache.WholeTree.KeepsRequestedPaths", GIT_BRANCH_STATE_TEST_FLAGS)
+bool FGitBranchStateCacheWholeTreeFilterTest::RunTest(const FString& Parameters)
+{
+	const TArray<FString> Requested{ TEXT("Content"), TEXT("Config/"), TEXT("Game.uproject") };
+
+	TestTrue(TEXT("file in directory"), IsUnderRequestedPath(TEXT("Content/A.uasset"), Requested));
+	TestTrue(TEXT("file in directory given with a slash"), IsUnderRequestedPath(TEXT("Config/DefaultEngine.ini"), Requested));
+	TestTrue(TEXT("requested file"), IsUnderRequestedPath(TEXT("Game.uproject"), Requested));
+	TestFalse(TEXT("sibling sharing a prefix"), IsUnderRequestedPath(TEXT("ContentOld/A.uasset"), Requested));
+	TestFalse(TEXT("unrequested directory"), IsUnderRequestedPath(TEXT("Source/X.cpp"), Requested));
+	TestFalse(TEXT("file sharing a prefix"), IsUnderRequestedPath(TEXT("Game.uproject.bak"), Requested));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitBranchStateCacheParseValidTest, "GitSourceControl.BranchStateCache.Parse.Valid", GIT_BRANCH_STATE_TEST_FLAGS)
 bool FGitBranchStateCacheParseValidTest::RunTest(const FString& Parameters)
 {

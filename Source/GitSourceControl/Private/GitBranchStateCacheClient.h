@@ -16,7 +16,7 @@ FString GetStateUrl();
  * Fills OutChangedRelativeFilesByBranch with, per branch, the repository relative files that branch has a different
  * version of than the local HEAD. True only when the service gave a complete, usable answer.
  *
- * @param InAbsoluteFiles        files to check, no directories
+ * @param InAbsoluteFiles        files or directories to check; a directory asks the service for the whole tree
  * @param InBranches             concrete remote branch names, e.g. "origin/main"
  * @param InCurrentRemoteBranch  the current branch's remote, or empty when it has none
  */

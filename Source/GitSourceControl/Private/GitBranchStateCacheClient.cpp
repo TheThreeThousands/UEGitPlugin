@@ -8,6 +8,7 @@
 
 #include "HAL/PlatformTime.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Misc/Paths.h"
 #include "Misc/ScopeLock.h"
 
 namespace GitBranchStateCacheClient
@@ -100,8 +101,27 @@ namespace
 		return false;
 	}
 
+	/** True for the repository root as RelativeFilenames spells it */
+	bool IsRepositoryRoot(const FString& InRelativePath)
+	{
+		return InRelativePath.IsEmpty() || InRelativePath == TEXT(".") || InRelativePath == TEXT("./") || InRelativePath == TEXT("/");
+	}
+
+	/** Directories in InRelativeFiles recurse, and the repository root reads the whole tree in one call */
 	bool GetHeadBlobs(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& InRelativeFiles, TMap<FString, FString>& OutBlobs)
 	{
+		if (InRelativeFiles.ContainsByPredicate(&IsRepositoryRoot))
+		{
+			FString Output;
+			FString Errors;
+			if (!GitSourceControlUtils::RunCommandInternalRaw(TEXT("-c core.quotePath=false ls-tree"), InPathToGitBinary, InRepositoryRoot, { TEXT("-r"), TEXT("HEAD") }, FGitSourceControlModule::GetEmptyStringArray(), Output, Errors))
+			{
+				return false;
+			}
+			OutBlobs = GitBranchStateCache::ParseLsTree(Output);
+			return true;
+		}
+
 		for (int32 Start = 0; Start < InRelativeFiles.Num(); Start += MaxFilesPerLsTree)
 		{
 			const int32 Count = FMath::Min(MaxFilesPerLsTree, InRelativeFiles.Num() - Start);
@@ -158,7 +178,10 @@ bool TryGetChangedFilesByBranch(const FString& InPathToGitBinary, const FString&
 		return false;
 	}
 
-	FGitScopedLogTimer Timer(FString::Printf(TEXT("GitBranchStateCache (%d files, %d branches)"), InAbsoluteFiles.Num(), InBranches.Num()));
+	// A directory asks for every changed path (the service matches paths exactly), and the answer is cut down to the request below
+	const bool bWholeTree = InAbsoluteFiles.ContainsByPredicate([](const FString& Path) { return FPaths::DirectoryExists(Path); });
+
+	FGitScopedLogTimer Timer(FString::Printf(TEXT("GitBranchStateCache (%d %s, %d branches)"), InAbsoluteFiles.Num(), bWholeTree ? TEXT("paths, whole tree") : TEXT("files"), InBranches.Num()));
 
 	// The artist's forge credential goes to this URL, so never over plain http except to a local test instance
 	if (!GitBranchStateCache::IsAllowedStateUrl(StateUrl, bFromUserOverride))
@@ -227,7 +250,7 @@ bool TryGetChangedFilesByBranch(const FString& InPathToGitBinary, const FString&
 	}
 
 	const FString Authorization = GitServiceHttp::BasicAuthorization(UserName, Password);
-	const FString Body = GitBranchStateCache::BuildStateRequestBody(Base, InBranches, RelativeFiles);
+	const FString Body = GitBranchStateCache::BuildStateRequestBody(Base, InBranches, RelativeFiles, !bWholeTree);
 
 	const GitServiceHttp::FPostResult Post = GitServiceHttp::PostJson(StateUrl + TEXT("/state"), Authorization, Body, RequestTimeoutSeconds);
 	if (!Post.bResponded)
@@ -285,7 +308,17 @@ bool TryGetChangedFilesByBranch(const FString& InPathToGitBinary, const FString&
 		return false;
 	}
 
-	const TMap<FString, FString> NewerFiles = GitBranchStateCache::ComputeNewerFiles(Response, HeadBlobs, InCurrentRemoteBranch);
+	TMap<FString, FString> NewerFiles = GitBranchStateCache::ComputeNewerFiles(Response, HeadBlobs, InCurrentRemoteBranch);
+	if (bWholeTree && !RelativeFiles.ContainsByPredicate(&IsRepositoryRoot))
+	{
+		for (auto It = NewerFiles.CreateIterator(); It; ++It)
+		{
+			if (!GitBranchStateCache::IsUnderRequestedPath(It.Key(), RelativeFiles))
+			{
+				It.RemoveCurrent();
+			}
+		}
+	}
 	for (const TPair<FString, FString>& NewerFile : NewerFiles)
 	{
 		OutChangedRelativeFilesByBranch.FindOrAdd(NewerFile.Value).Add(NewerFile.Key);

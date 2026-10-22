@@ -1482,10 +1482,9 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 		}
 	};
 
-	// Ask the service for file level checks, it answers from server side mirrors instead of one git diff per branch here.
-	// Directories (wholesale refreshes) and any failure take the local path below.
+	// Ask the service, it answers from server side mirrors instead of one git diff per branch here. Directories (wholesale
+	// refreshes) ask for the whole tree. Any failure takes the local path below.
 	bool bAnsweredByBranchStateCache = false;
-	if (!ContainsDirectory(Files))
 	{
 		TMap<FString, TArray<FString>> ChangedFilesByBranch;
 		if (GitBranchStateCacheClient::TryGetChangedFilesByBranch(InPathToGitBinary, InRepositoryRoot, Files, BranchesToDiff.Array(),

@@ -38,8 +38,17 @@ struct FStateResponse
 	bool bTruncated = false;
 };
 
-/** JSON body for POST .../state. Branches are sent as concrete names in branchPatterns. */
-FString BuildStateRequestBody(const FString& InBase, const TArray<FString>& InBranches, const TArray<FString>& InRelativePaths);
+/**
+ * JSON body for POST .../state. Branches are sent as concrete names in branchPatterns. Without bInIncludePaths the
+ * paths field is left out, which asks for every changed path (an empty list would ask for none).
+ */
+FString BuildStateRequestBody(const FString& InBase, const TArray<FString>& InBranches, const TArray<FString>& InRelativePaths, bool bInIncludePaths = true);
+
+/**
+ * True when a repository relative path is one of the requested paths or lies under a requested directory. Used to keep
+ * only the requested part of a whole-tree answer. Directories may be given with or without a trailing slash.
+ */
+bool IsUnderRequestedPath(const FString& InRelativePath, const TArray<FString>& InRequestedRelativePaths);
 
 /** Reads a /state response. False on malformed JSON or a missing "branches" or "paths" field. */
 bool ParseStateResponse(const FString& InJson, FStateResponse& OutResponse, FString& OutError);

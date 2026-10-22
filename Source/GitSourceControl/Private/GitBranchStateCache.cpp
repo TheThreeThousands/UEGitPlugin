@@ -108,7 +108,7 @@ FString UnquoteGitPath(const FString& InPath)
 
 }
 
-FString BuildStateRequestBody(const FString& InBase, const TArray<FString>& InBranches, const TArray<FString>& InRelativePaths)
+FString BuildStateRequestBody(const FString& InBase, const TArray<FString>& InBranches, const TArray<FString>& InRelativePaths, const bool bInIncludePaths)
 {
 	FString Body;
 	const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer = TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Body);
@@ -120,15 +120,42 @@ FString BuildStateRequestBody(const FString& InBase, const TArray<FString>& InBr
 		Writer->WriteValue(Branch);
 	}
 	Writer->WriteArrayEnd();
-	Writer->WriteArrayStart(TEXT("paths"));
-	for (const FString& Path : InRelativePaths)
+	if (bInIncludePaths)
 	{
-		Writer->WriteValue(Path);
+		Writer->WriteArrayStart(TEXT("paths"));
+		for (const FString& Path : InRelativePaths)
+		{
+			Writer->WriteValue(Path);
+		}
+		Writer->WriteArrayEnd();
 	}
-	Writer->WriteArrayEnd();
 	Writer->WriteObjectEnd();
 	Writer->Close();
 	return Body;
+}
+
+bool IsUnderRequestedPath(const FString& InRelativePath, const TArray<FString>& InRequestedRelativePaths)
+{
+	for (const FString& Requested : InRequestedRelativePaths)
+	{
+		FString Prefix = Requested;
+		while (Prefix.EndsWith(TEXT("/")))
+		{
+			Prefix.LeftChopInline(1);
+		}
+		if (Prefix.IsEmpty())
+		{
+			// The repository root itself
+			return true;
+		}
+		// Not case sensitive: a path dropped here would hide a NotAtHead, while an extra one only matches no requested state
+		if (InRelativePath.Equals(Prefix, ESearchCase::IgnoreCase)
+			|| (InRelativePath.StartsWith(Prefix, ESearchCase::IgnoreCase) && InRelativePath.Len() > Prefix.Len() && InRelativePath[Prefix.Len()] == TEXT('/')))
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 bool ParseStateResponse(const FString& InJson, FStateResponse& OutResponse, FString& OutError)
