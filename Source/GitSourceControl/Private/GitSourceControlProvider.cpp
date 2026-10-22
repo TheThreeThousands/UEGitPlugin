@@ -37,7 +37,7 @@
 #include "Algo/RemoveIf.h"
 
 // [DIVERGENCE]
-#include "GitBranchStateCacheClient.h"
+#include "GitServiceHttp.h"
 #define GIT_SYNC_LOOP_HAS_HTTP_THREAD_COMPLETION (ENGINE_MAJOR_VERSION > 5 || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 4))
 #if !GIT_SYNC_LOOP_HAS_HTTP_THREAD_COMPLETION
 #include "HttpManager.h"
@@ -850,7 +850,7 @@ ECommandResult::Type FGitSourceControlProvider::ExecuteSynchronousCommand(FGitSo
 
 			// [DIVERGENCE] Before 5.4 HTTP requests only complete when the HTTP manager ticks on the game thread, which this loop blocks
 #if !GIT_SYNC_LOOP_HAS_HTTP_THREAD_COMPLETION
-			if (GitBranchStateCacheClient::IsRequestInFlight())
+			if (GitServiceHttp::IsRequestInFlight())
 			{
 				FHttpModule::Get().GetHttpManager().Tick(0.0f);
 			}

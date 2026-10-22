@@ -23,7 +23,4 @@ FString GetStateUrl();
 bool TryGetChangedFilesByBranch(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& InAbsoluteFiles,
 								const TArray<FString>& InBranches, const FString& InCurrentRemoteBranch, TMap<FString, TArray<FString>>& OutChangedRelativeFilesByBranch);
 
-/** True while a request is waiting for a response. Engines without HTTP thread completion need the HTTP manager ticked meanwhile. */
-bool IsRequestInFlight();
-
 }
