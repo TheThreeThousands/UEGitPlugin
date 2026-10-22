@@ -3,6 +3,13 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "GitBranchStateCache.h"
+#include "GitBranchStateCacheClient.h"
+#include "GitSourceControlModule.h"
+#include "GitSourceControlUtils.h"
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Guid.h"
+#include "Misc/Paths.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -400,6 +407,61 @@ bool FGitBranchStateCacheMissingCurrentBranchTest::RunTest(const FString& Parame
 	TestFalse(TEXT("Current remote branch missing from the answer"), AnswersForBranch(Response, TEXT("origin/main")));
 	TestTrue(TEXT("Listed branch"), AnswersForBranch(Response, TEXT("origin/KO-1")));
 	TestTrue(TEXT("No current remote branch to check"), AnswersForBranch(Response, FString()));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitBranchStateCacheAmbiguousBaseTest, "GitSourceControl.BranchStateCache.Base.AmbiguousWhenBranchHasLocalCommits", GIT_BRANCH_STATE_TEST_FLAGS)
+bool FGitBranchStateCacheAmbiguousBaseTest::RunTest(const FString& Parameters)
+{
+	const FString GitBinary = GitSourceControlUtils::FindGitBinaryPath();
+	const FString Root = FPaths::ConvertRelativePathToFull(FPaths::ProjectIntermediateDir() / TEXT("GitSourceControlTests") / FGuid::NewGuid().ToString());
+	IFileManager::Get().MakeDirectory(*Root, true);
+
+	TArray<FString> Results;
+	TArray<FString> Errors;
+	auto Git = [&](const FString& Command, const TArray<FString>& InParameters)
+	{
+		Results.Reset();
+		return GitSourceControlUtils::RunCommand(Command, GitBinary, Root, InParameters, FGitSourceControlModule::GetEmptyStringArray(), Results, Errors);
+	};
+	auto Commit = [&](const FString& Content)
+	{
+		FFileHelper::SaveStringToFile(Content, *(Root / TEXT("Asset.txt")));
+		return Git(TEXT("add"), { TEXT("Asset.txt") })
+			&& Git(TEXT("-c user.name=Test -c user.email=test@example.com -c commit.gpgsign=false commit"), { TEXT("-q"), TEXT("-m"), Content });
+	};
+	auto Head = [&]()
+	{
+		Git(TEXT("rev-parse"), { TEXT("HEAD") });
+		return Results.Num() > 0 ? Results[0].TrimStartAndEnd() : FString();
+	};
+
+	// A changes the asset, local HEAD B changes it again, and a status branch descends from B and changes it back to A's
+	// content. The service diffs A against the branch tip, sees no change, and would call the asset up to date.
+	if (!TestTrue(TEXT("init"), Git(TEXT("init"), { TEXT("-q") }) && Commit(TEXT("A"))))
+	{
+		return false;
+	}
+	const FString A = Head();
+	Commit(TEXT("B"));
+	const FString B = Head();
+	Git(TEXT("branch"), { TEXT("older"), A });
+	Git(TEXT("checkout"), { TEXT("-q"), TEXT("-b"), TEXT("status") });
+	Commit(TEXT("A"));
+	Git(TEXT("checkout"), { TEXT("-q"), TEXT("-") });
+	TestEqual(TEXT("back on B"), Head(), B);
+
+	bool bAmbiguous = false;
+	TestTrue(TEXT("check runs"), GitBranchStateCacheClient::IsBaseAmbiguous(GitBinary, Root, A, { TEXT("status") }, bAmbiguous));
+	TestTrue(TEXT("a branch holds commits past the base"), bAmbiguous);
+
+	TestTrue(TEXT("check runs"), GitBranchStateCacheClient::IsBaseAmbiguous(GitBinary, Root, A, { TEXT("older") }, bAmbiguous));
+	TestFalse(TEXT("unpushed commits on no branch"), bAmbiguous);
+
+	TestTrue(TEXT("check runs"), GitBranchStateCacheClient::IsBaseAmbiguous(GitBinary, Root, B, { TEXT("status") }, bAmbiguous));
+	TestFalse(TEXT("base is HEAD"), bAmbiguous);
+
+	IFileManager::Get().DeleteDirectory(*Root, false, true);
 	return true;
 }
 

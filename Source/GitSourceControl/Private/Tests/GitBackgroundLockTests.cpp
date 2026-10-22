@@ -57,6 +57,41 @@ bool FGitSourceControlLogRedactTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitBackgroundLockRegistryPendingTest, "GitSourceControl.BackgroundLock.Registry.UnlockWaitsForPendingLock", GIT_BACKGROUND_LOCK_TEST_FLAGS)
+bool FGitBackgroundLockRegistryPendingTest::RunTest(const FString& Parameters)
+{
+	GitBackgroundLock::FLockOperationRegistry Registry;
+	const uint64 Ticket = Registry.BeginBackgroundLock({ TEXT("Content/A.uasset"), TEXT("Content/B.uasset") });
+
+	// An unlock of a file whose background lock has not finished would find no lock, and the lock would land after it
+	TestTrue(TEXT("pending, case ignored"), Registry.IsAnyPending({ TEXT("content/a.uasset") }));
+	TestFalse(TEXT("other files not pending"), Registry.IsAnyPending({ TEXT("Content/C.uasset") }));
+	TestTrue(TEXT("anything pending"), Registry.IsAnyPending());
+
+	Registry.EndBackgroundLock(Ticket);
+	TestFalse(TEXT("finished"), Registry.IsAnyPending({ TEXT("Content/A.uasset") }));
+	TestFalse(TEXT("nothing pending"), Registry.IsAnyPending());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitBackgroundLockRegistryStaleTest, "GitSourceControl.BackgroundLock.Registry.LaterOperationMakesResultStale", GIT_BACKGROUND_LOCK_TEST_FLAGS)
+bool FGitBackgroundLockRegistryStaleTest::RunTest(const FString& Parameters)
+{
+	GitBackgroundLock::FLockOperationRegistry Registry;
+	const uint64 Ticket = Registry.BeginBackgroundLock({ TEXT("Content/A.uasset"), TEXT("Content/B.uasset") });
+	TestTrue(TEXT("latest before anything else runs"), Registry.IsLatest(TEXT("Content/A.uasset"), Ticket));
+
+	// A revert or check in that ran after the lock owns the file's lock state now, so a late lock failure must not overwrite it
+	Registry.EndBackgroundLock(Ticket);
+	Registry.BeginForegroundOperation({ TEXT("CONTENT/A.uasset") });
+	TestFalse(TEXT("stale after a later operation"), Registry.IsLatest(TEXT("Content/A.uasset"), Ticket));
+	TestTrue(TEXT("untouched file still latest"), Registry.IsLatest(TEXT("Content/B.uasset"), Ticket));
+
+	Registry.Reset();
+	TestFalse(TEXT("reset clears pending"), Registry.IsAnyPending());
+	return true;
+}
+
 #undef GIT_BACKGROUND_LOCK_TEST_FLAGS
 
 #endif

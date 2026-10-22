@@ -37,6 +37,7 @@
 #include "Algo/RemoveIf.h"
 
 // [DIVERGENCE]
+#include "GitBackgroundLock.h"
 #include "GitServiceHttp.h"
 #define GIT_SYNC_LOOP_HAS_HTTP_THREAD_COMPLETION (ENGINE_MAJOR_VERSION > 5 || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 4))
 #if !GIT_SYNC_LOOP_HAS_HTTP_THREAD_COMPLETION
@@ -265,6 +266,21 @@ int32 FGitSourceControlProvider::GetNumLastErrors() const
 
 void FGitSourceControlProvider::Close()
 {
+	// [DIVERGENCE] A background lock still running would otherwise outlive the provider, or the module once it unloads
+	const double DrainStartSeconds = FPlatformTime::Seconds();
+	while (GitBackgroundLock::NumRunningLocks() > 0 && FPlatformTime::Seconds() - DrainStartSeconds < 30.0)
+	{
+#if !GIT_SYNC_LOOP_HAS_HTTP_THREAD_COMPLETION
+		if (GitServiceHttp::IsRequestInFlight())
+		{
+			FHttpModule::Get().GetHttpManager().Tick(0.0f);
+		}
+#endif
+		FPlatformProcess::Sleep(0.01f);
+	}
+	GitBackgroundLock::ForgetLocks();
+	// [END DIVERGENCE]
+
 	// clear the cache
 	StateCache.Empty();
 	// Remove all extensions to the "Revision Control" menu in the Editor Toolbar

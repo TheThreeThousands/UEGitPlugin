@@ -197,6 +197,36 @@ bool FGitLfsLockBatchUnknownTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitLfsLockBatchClassifyTest, "GitSourceControl.LfsLockBatch.Response.AmbiguousRepliesAreUnknown", GIT_LFS_LOCK_BATCH_TEST_FLAGS)
+bool FGitLfsLockBatchClassifyTest::RunTest(const FString& Parameters)
+{
+	TestTrue(TEXT("answered"), ClassifyResponse(200, true) == EResponseOutcome::Answered);
+	// Refused before any item ran, so git lfs can safely do them all
+	TestTrue(TEXT("no route"), ClassifyResponse(404, false) == EResponseOutcome::NotAsked);
+	TestTrue(TEXT("too many paths"), ClassifyResponse(413, false) == EResponseOutcome::NotAsked);
+	TestTrue(TEXT("credential refused"), ClassifyResponse(401, false) == EResponseOutcome::NotAsked);
+	TestTrue(TEXT("bad request"), ClassifyResponse(400, false) == EResponseOutcome::NotAsked);
+	// A gateway or server error can arrive after some items were granted or released
+	TestTrue(TEXT("bad gateway"), ClassifyResponse(502, false) == EResponseOutcome::Unknown);
+	TestTrue(TEXT("server error"), ClassifyResponse(500, false) == EResponseOutcome::Unknown);
+	TestTrue(TEXT("unreadable 200"), ClassifyResponse(200, false) == EResponseOutcome::Unknown);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitLfsLockBatchItemUnauthorizedTest, "GitSourceControl.LfsLockBatch.Response.ItemUnauthorized", GIT_LFS_LOCK_BATCH_TEST_FLAGS)
+bool FGitLfsLockBatchItemUnauthorizedTest::RunTest(const FString& Parameters)
+{
+	TArray<FItemResult> Results;
+	FString Error;
+	ParseResponse(GitLfsLockBatchTests::ReadmeResponse, { TEXT("Content/A.uasset"), TEXT("Content/B.uasset") }, Results, Error);
+	TestFalse(TEXT("a 409 is not a credential problem"), HasUnauthorizedItem(Results));
+
+	// GitLfsCache relays each upstream failure inside a 200, so an expired token shows up per item
+	ParseResponse(TEXT(R"({ "results": [ { "path": "Content/A.uasset", "ok": false, "status": 401, "message": "Unauthorized" } ] })"), { TEXT("Content/A.uasset") }, Results, Error);
+	TestTrue(TEXT("a 401 item"), HasUnauthorizedItem(Results));
+	return true;
+}
+
 #undef GIT_LFS_LOCK_BATCH_TEST_FLAGS
 
 #endif

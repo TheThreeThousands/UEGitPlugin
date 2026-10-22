@@ -171,12 +171,17 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 	const bool bLockInBackground = GitBackgroundLock::CanLockInBackground(InCommand.PathToGitRoot, InCommand.PathToGitBinary, AbsoluteFiles, BlockingLockReason);
 	if (bLockInBackground)
 	{
+		// Registered now so an unlock of these files waits for it, but started from UpdateStates
 		UE_LOG(LogGitSourceControl, Log, TEXT("[%s] Locking %d files in the background"), GitSourceControlLog::GetThreadLabel(), LockableRelativeFiles.Num());
-		GitBackgroundLock::LockFiles(InCommand.PathToGitRoot, InCommand.PathToGitBinary, LockableRelativeFiles);
+		BackgroundLockTicket = GitBackgroundLock::RegisterLock(LockableRelativeFiles);
+		BackgroundLockGitRoot = InCommand.PathToGitRoot;
+		BackgroundLockGitBinary = InCommand.PathToGitBinary;
+		BackgroundLockFiles = LockableRelativeFiles;
 	}
 	else
 	{
 		UE_LOG(LogGitSourceControl, Log, TEXT("[%s] Locking %d files and waiting: %s"), GitSourceControlLog::GetThreadLabel(), LockableRelativeFiles.Num(), *BlockingLockReason);
+		GitBackgroundLock::WaitForBackgroundLocks(LockableRelativeFiles);
 	}
 	const bool bSuccess = bLockInBackground || GitSourceControlUtils::RunLfsLockOperation(true, InCommand.PathToGitRoot, InCommand.PathToGitBinary, LockableRelativeFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 	// [END DIVERGENCE]
@@ -201,6 +206,18 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 
 	return InCommand.bCommandSuccessful;
 }
+
+// [DIVERGENCE] Runs on the game thread once the command finished
+bool FGitCheckOutWorker::UpdateStates() const
+{
+	const bool bUpdated = FGitSourceControlWorker::UpdateStates();
+	if (BackgroundLockTicket != 0)
+	{
+		GitBackgroundLock::LockFiles(BackgroundLockGitRoot, BackgroundLockGitBinary, BackgroundLockFiles, BackgroundLockTicket);
+	}
+	return bUpdated;
+}
+// [END DIVERGENCE]
 
 static FText ParseCommitResults(const TArray<FString>& InResults)
 {

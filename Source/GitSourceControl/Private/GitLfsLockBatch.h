@@ -39,6 +39,23 @@ FString BuildBody(EOperation InOperation, const TArray<FString>& InRelativePaths
  */
 bool ParseResponse(const FString& InJson, const TArray<FString>& InRequestedPaths, TArray<FItemResult>& OutResults, FString& OutError);
 
+/** What one locks/batch reply means for the paths it carried */
+enum class EResponseOutcome : uint8
+{
+	/** A results array: each item's result is final */
+	Answered,
+	/** Refused before any item ran (no such route, too many paths, a refused credential), so git lfs can do them all */
+	NotAsked,
+	/** Upstream may have acted on some items (a server or gateway error, a 200 that cannot be read), so check the locks first */
+	Unknown,
+};
+
+/** Classifies a reply by its HTTP status, and for a 200 by whether ParseResponse could read it */
+EResponseOutcome ClassifyResponse(int32 InResponseCode, bool bInParsed);
+
+/** True when upstream refused an item's credential (status 401), which GitLfsCache reports inside a 200 */
+bool HasUnauthorizedItem(const TArray<FItemResult>& InResults);
+
 /** The URL on the `Endpoint=<url> (auth=...)` line of `git lfs env`. False when there is none. */
 bool ParseLfsEnvEndpoint(const TArray<FString>& InLines, FString& OutUrl);
 

@@ -99,6 +99,20 @@ bool ParseResponse(const FString& InJson, const TArray<FString>& InRequestedPath
 	return true;
 }
 
+EResponseOutcome ClassifyResponse(const int32 InResponseCode, const bool bInParsed)
+{
+	if (InResponseCode == 200)
+	{
+		return bInParsed ? EResponseOutcome::Answered : EResponseOutcome::Unknown;
+	}
+	return InResponseCode >= 500 ? EResponseOutcome::Unknown : EResponseOutcome::NotAsked;
+}
+
+bool HasUnauthorizedItem(const TArray<FItemResult>& InResults)
+{
+	return InResults.ContainsByPredicate([](const FItemResult& Result) { return !Result.bOk && Result.Status == 401; });
+}
+
 bool ParseLfsEnvEndpoint(const TArray<FString>& InLines, FString& OutUrl)
 {
 	static const FString Prefix = TEXT("Endpoint=");

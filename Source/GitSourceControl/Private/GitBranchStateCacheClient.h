@@ -13,6 +13,13 @@ namespace GitBranchStateCacheClient
 FString GetStateUrl();
 
 /**
+ * The service diffs each branch from its merge base with InBase. When a status branch holds commits from InBase..HEAD (local
+ * commits that reached that branch but not the upstream), the true merge base is newer, and a file that branch later changed
+ * back to InBase's content would look up to date. bOutAmbiguous says so. False when git could not answer.
+ */
+bool IsBaseAmbiguous(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const FString& InBase, const TArray<FString>& InBranches, bool& bOutAmbiguous);
+
+/**
  * Fills OutChangedRelativeFilesByBranch with, per branch, the repository relative files that branch has a different
  * version of than the local HEAD. True only when the service gave a complete, usable answer.
  *

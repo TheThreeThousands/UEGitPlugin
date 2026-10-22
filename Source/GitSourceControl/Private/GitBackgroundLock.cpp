@@ -6,9 +6,13 @@
 #include "GitSourceControlProvider.h"
 #include "GitSourceControlState.h"
 #include "GitSourceControlUtils.h"
+#include "HAL/PlatformProcess.h"
+#include "HAL/PlatformTime.h"
+#include "HAL/ThreadSafeCounter.h"
 #include "ISourceControlModule.h"
 #include "Misc/MessageDialog.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeLock.h"
 #include "Runtime/Launch/Resources/Version.h"
 #include "SourceControlHelpers.h"
 #include "SourceControlOperations.h"
@@ -17,6 +21,72 @@
 
 namespace GitBackgroundLock
 {
+	static FCriticalSection RegistryCriticalSection;
+	static FLockOperationRegistry Registry;
+	static FThreadSafeCounter RunningLocks;
+
+	/** How long an unlock waits for a background lock of the same file before going ahead anyway */
+	static constexpr double MaxWaitForBackgroundLockSeconds = 120.0;
+
+	uint64 FLockOperationRegistry::BeginBackgroundLock(const TArray<FString>& InPaths)
+	{
+		const uint64 Ticket = NextTicket++;
+		for (const FString& Path : InPaths)
+		{
+			LatestTicketByPath.Add(Path, Ticket);
+		}
+		PendingPathsByTicket.Add(Ticket, InPaths);
+		return Ticket;
+	}
+
+	void FLockOperationRegistry::EndBackgroundLock(const uint64 InTicket)
+	{
+		PendingPathsByTicket.Remove(InTicket);
+	}
+
+	void FLockOperationRegistry::BeginForegroundOperation(const TArray<FString>& InPaths)
+	{
+		const uint64 Ticket = NextTicket++;
+		for (const FString& Path : InPaths)
+		{
+			LatestTicketByPath.Add(Path, Ticket);
+		}
+	}
+
+	bool FLockOperationRegistry::IsAnyPending(const TArray<FString>& InPaths) const
+	{
+		// FString equality and hashing ignore case
+		for (const TPair<uint64, TArray<FString>>& Pending : PendingPathsByTicket)
+		{
+			for (const FString& Path : InPaths)
+			{
+				if (Pending.Value.Contains(Path))
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	bool FLockOperationRegistry::IsAnyPending() const
+	{
+		return PendingPathsByTicket.Num() > 0;
+	}
+
+	bool FLockOperationRegistry::IsLatest(const FString& InPath, const uint64 InTicket) const
+	{
+		const uint64* Latest = LatestTicketByPath.Find(InPath);
+		return Latest != nullptr && *Latest == InTicket;
+	}
+
+	void FLockOperationRegistry::Reset()
+	{
+		// NextTicket keeps counting, so a result from before the reset never looks current
+		LatestTicketByPath.Reset();
+		PendingPathsByTicket.Reset();
+	}
+
 	static TArray<FString> ToAbsoluteFilenames(const TArray<FString>& RelativeFiles, const FString& PathToGitRoot)
 	{
 		TArray<FString> AbsoluteFiles;
@@ -51,18 +121,38 @@ namespace GitBackgroundLock
 	}
 
 	/** Our optimistic locked state is wrong once the lock fails, so ask git lfs who really holds the locks and correct the cache */
-	static void HandleLockFailure(const FString& PathToGitRoot, const FString& PathToGitBinary, const TArray<FString>& RelativeFiles, const TArray<FString>& ErrorMessages)
+	static void HandleLockFailure(const FString& PathToGitRoot, const FString& PathToGitBinary, const TArray<FString>& RelativeFiles, const TArray<FString>& ErrorMessages, const uint64 Ticket)
 	{
 		TMap<const FString, FGitState> RefreshedStates;
 		TArray<FString> RefreshErrors;
 		GitSourceControlUtils::RefreshLocks(FGitSourceControlModule::GetEmptyStringArray(), PathToGitRoot, PathToGitBinary, RefreshErrors, RefreshedStates);
 
+		const TArray<FString> AbsoluteFiles = ToAbsoluteFilenames(RelativeFiles, PathToGitRoot);
 		TArray<FString> FailedFiles;
-		TMap<const FString, FGitState> FailureStates = BuildLockFailureStates(RefreshedStates, ToAbsoluteFilenames(RelativeFiles, PathToGitRoot), FailedFiles);
+		TMap<const FString, FGitState> FailureStates = BuildLockFailureStates(RefreshedStates, AbsoluteFiles, FailedFiles);
 
 		const FString Reason = FString::Join(ErrorMessages, TEXT("\n"));
-		AsyncTask(ENamedThreads::GameThread, [FailedFiles, Reason, FailureStates = MoveTemp(FailureStates)]()
+		AsyncTask(ENamedThreads::GameThread, [RelativeFiles, AbsoluteFiles, Ticket, FailedFiles, Reason, FailureStates = MoveTemp(FailureStates)]() mutable
 		{
+			FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
+			if (GitSourceControl == nullptr || !GitSourceControl->GetProvider().IsAvailable())
+			{
+				return;
+			}
+
+			// A revert, check in or lock that ran since this lock owns the file's lock state now
+			{
+				FScopeLock Lock(&RegistryCriticalSection);
+				for (int32 Index = 0; Index < RelativeFiles.Num(); ++Index)
+				{
+					if (!Registry.IsLatest(RelativeFiles[Index], Ticket))
+					{
+						FailureStates.Remove(AbsoluteFiles[Index]);
+						FailedFiles.Remove(AbsoluteFiles[Index]);
+					}
+				}
+			}
+
 			GitSourceControlUtils::UpdateCachedStates(FailureStates);
 			if (FailedFiles.Num() > 0)
 			{
@@ -146,19 +236,64 @@ namespace GitBackgroundLock
 		return States;
 	}
 
-	void LockFiles(const FString& PathToGitRoot, const FString& PathToGitBinary, const TArray<FString>& RelativeFiles)
+	uint64 RegisterLock(const TArray<FString>& RelativeFiles)
 	{
-		Async(EAsyncExecution::ThreadPool, [PathToGitRoot, PathToGitBinary, RelativeFiles]()
+		FScopeLock Lock(&RegistryCriticalSection);
+		return Registry.BeginBackgroundLock(RelativeFiles);
+	}
+
+	void LockFiles(const FString& PathToGitRoot, const FString& PathToGitBinary, const TArray<FString>& RelativeFiles, const uint64 Ticket)
+	{
+		RunningLocks.Increment();
+		Async(EAsyncExecution::ThreadPool, [PathToGitRoot, PathToGitBinary, RelativeFiles, Ticket]()
 		{
 			TArray<FString> InfoMessages;
 			TArray<FString> ErrorMessages;
 			const bool bLocked = GitSourceControlUtils::RunLfsLockOperation(true, PathToGitRoot, PathToGitBinary, RelativeFiles, InfoMessages, ErrorMessages);
 			UE_LOG(LogGitSourceControl, Log, TEXT("[%s] Background lock of %d files %s"), GitSourceControlLog::GetThreadLabel(), RelativeFiles.Num(), bLocked ? TEXT("succeeded") : TEXT("failed"));
+			{
+				FScopeLock Lock(&RegistryCriticalSection);
+				Registry.EndBackgroundLock(Ticket);
+			}
 			if (!bLocked)
 			{
-				HandleLockFailure(PathToGitRoot, PathToGitBinary, RelativeFiles, ErrorMessages);
+				HandleLockFailure(PathToGitRoot, PathToGitBinary, RelativeFiles, ErrorMessages, Ticket);
 			}
+			RunningLocks.Decrement();
 		});
+	}
+
+	void WaitForBackgroundLocks(const TArray<FString>& RelativeFiles)
+	{
+		const double StartSeconds = FPlatformTime::Seconds();
+		for (;;)
+		{
+			{
+				FScopeLock Lock(&RegistryCriticalSection);
+				const bool bPending = Registry.IsAnyPending(RelativeFiles);
+				if (!bPending || FPlatformTime::Seconds() - StartSeconds > MaxWaitForBackgroundLockSeconds)
+				{
+					if (bPending)
+					{
+						UE_LOG(LogGitSourceControl, Warning, TEXT("[%s] Gave up waiting for a background lock of the same files after %.0f s"), GitSourceControlLog::GetThreadLabel(), MaxWaitForBackgroundLockSeconds);
+					}
+					Registry.BeginForegroundOperation(RelativeFiles);
+					return;
+				}
+			}
+			FPlatformProcess::Sleep(0.02f);
+		}
+	}
+
+	int32 NumRunningLocks()
+	{
+		return RunningLocks.GetValue();
+	}
+
+	void ForgetLocks()
+	{
+		FScopeLock Lock(&RegistryCriticalSection);
+		Registry.Reset();
 	}
 }
 

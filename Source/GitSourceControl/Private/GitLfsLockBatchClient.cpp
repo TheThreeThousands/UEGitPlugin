@@ -113,17 +113,12 @@ namespace
 		CachedPassword.Empty();
 	}
 
-	enum class EChunkOutcome : uint8
-	{
-		Answered,
-		NotAsked,
-		Unknown,
-	};
-
 	/** Sends one chunk. Without a well-formed answer, the outcome says whether upstream may have acted on it anyway. */
-	EChunkOutcome PostChunk(const FString& InBatchUrl, const FString& InAuthorization, const GitLfsLockBatch::EOperation InOperation, const TArray<FString>& InChunk,
-							const FString& InRef, TArray<GitLfsLockBatch::FItemResult>& OutResults)
+	GitLfsLockBatch::EResponseOutcome PostChunk(const FString& InBatchUrl, const FString& InAuthorization, const GitLfsLockBatch::EOperation InOperation, const TArray<FString>& InChunk,
+												const FString& InRef, TArray<GitLfsLockBatch::FItemResult>& OutResults)
 	{
+		using GitLfsLockBatch::EResponseOutcome;
+
 		const FString Body = GitLfsLockBatch::BuildBody(InOperation, InChunk, InRef);
 		const GitServiceHttp::FPostResult Post = GitServiceHttp::PostJson(InBatchUrl, InAuthorization, Body, GitLfsLockBatch::TimeoutSeconds(InChunk.Num()));
 		if (!Post.bResponded)
@@ -141,14 +136,13 @@ namespace
 			}
 			LogFallbackOnce(FString::Printf(TEXT("%s: %s"), *GitBranchStateCache::StripUserInfo(InBatchUrl), *Post.Error));
 			// A refused connection never reached GitLfsCache, but a request that timed out may already have been fanned out
-			return Post.bConnectionFailure ? EChunkOutcome::NotAsked : EChunkOutcome::Unknown;
+			return Post.bConnectionFailure ? EResponseOutcome::NotAsked : EResponseOutcome::Unknown;
 		}
 
 		if (Post.ResponseCode == 404)
 		{
 			// No such route: lfs.url is not GitLfsCache, or its locking is switched off
 			DisableForSession(FString::Printf(TEXT("%s answered HTTP 404"), *GitBranchStateCache::StripUserInfo(InBatchUrl)));
-			return EChunkOutcome::NotAsked;
 		}
 		if (Post.ResponseCode == 401)
 		{
@@ -164,21 +158,33 @@ namespace
 				LogFallbackOnce(FString::Printf(TEXT("%s refused the stored credential twice, disabled for this session"), *GitBranchStateCache::StripUserInfo(InBatchUrl)));
 			}
 		}
-		if (Post.ResponseCode != 200)
-		{
-			// Refused as a whole (bad request, too many paths, credential), so no item was attempted
-			LogFallbackOnce(FString::Printf(TEXT("%s answered HTTP %d"), *GitBranchStateCache::StripUserInfo(InBatchUrl), Post.ResponseCode));
-			return EChunkOutcome::NotAsked;
-		}
 
 		FString Error;
-		if (!GitLfsLockBatch::ParseResponse(Post.Body, InChunk, OutResults, Error))
+		const bool bParsed = Post.ResponseCode == 200 && GitLfsLockBatch::ParseResponse(Post.Body, InChunk, OutResults, Error);
+		const EResponseOutcome Outcome = GitLfsLockBatch::ClassifyResponse(Post.ResponseCode, bParsed);
+		if (Outcome == EResponseOutcome::Answered)
+		{
+			// Recorded per chunk, so a later chunk's failure still counts towards the backoff
+			FScopeLock Lock(&StateCriticalSection);
+			Backoff.RecordSuccess();
+			LoggedReasons.Reset();
+		}
+		else if (Post.ResponseCode == 200)
 		{
 			// Not GitLfsCache, which would have answered this route with results; it will answer the same way every time
 			DisableForSession(FString::Printf(TEXT("%s is not a locks/batch answer: %s"), *GitBranchStateCache::StripUserInfo(InBatchUrl), *Error));
-			return EChunkOutcome::NotAsked;
 		}
-		return EChunkOutcome::Answered;
+		else if (Post.ResponseCode != 404)
+		{
+			LogFallbackOnce(FString::Printf(TEXT("%s answered HTTP %d"), *GitBranchStateCache::StripUserInfo(InBatchUrl), Post.ResponseCode));
+		}
+
+		if (GitLfsLockBatch::HasUnauthorizedItem(OutResults))
+		{
+			// Upstream refused the credential for an item. Those results stand, but the next operation asks git for a fresh one.
+			ForgetCredential();
+		}
+		return Outcome;
 	}
 }
 
@@ -255,14 +261,14 @@ void Run(const GitLfsLockBatch::EOperation InOperation, const FString& InPathToG
 	for (int32 ChunkIndex = 0; ChunkIndex < Chunks.Num(); ++ChunkIndex)
 	{
 		TArray<GitLfsLockBatch::FItemResult> ChunkResults;
-		const EChunkOutcome ChunkOutcome = PostChunk(BatchUrl, Authorization, InOperation, Chunks[ChunkIndex], Ref, ChunkResults);
-		if (ChunkOutcome == EChunkOutcome::Answered)
+		const GitLfsLockBatch::EResponseOutcome ChunkOutcome = PostChunk(BatchUrl, Authorization, InOperation, Chunks[ChunkIndex], Ref, ChunkResults);
+		if (ChunkOutcome == GitLfsLockBatch::EResponseOutcome::Answered)
 		{
 			OutOutcome.Answered.Append(MoveTemp(ChunkResults));
 			continue;
 		}
 
-		(ChunkOutcome == EChunkOutcome::Unknown ? OutOutcome.Unknown : OutOutcome.NotAsked).Append(Chunks[ChunkIndex]);
+		(ChunkOutcome == GitLfsLockBatch::EResponseOutcome::Unknown ? OutOutcome.Unknown : OutOutcome.NotAsked).Append(Chunks[ChunkIndex]);
 		for (int32 Remaining = ChunkIndex + 1; Remaining < Chunks.Num(); ++Remaining)
 		{
 			OutOutcome.NotAsked.Append(Chunks[Remaining]);
@@ -274,12 +280,6 @@ void Run(const GitLfsLockBatch::EOperation InOperation, const FString& InPathToG
 	for (const GitLfsLockBatch::FItemResult& Result : OutOutcome.Answered)
 	{
 		Succeeded += Result.bOk ? 1 : 0;
-	}
-	if (OutOutcome.Answered.Num() > 0)
-	{
-		FScopeLock Lock(&StateCriticalSection);
-		Backoff.RecordSuccess();
-		LoggedReasons.Reset();
 	}
 	Timer.SetOutcome(FString::Printf(TEXT("%d of %d answered succeeded, %d unanswered, %d not sent"), Succeeded, OutOutcome.Answered.Num(), OutOutcome.Unknown.Num(), OutOutcome.NotAsked.Num()));
 }

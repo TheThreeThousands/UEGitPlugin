@@ -14,6 +14,7 @@
 #include "HAL/PlatformTime.h"
 #include "Algo/AnyOf.h"
 #include "GitBranchStateCacheClient.h"
+#include "GitBackgroundLock.h"
 #include "GitLfsLockBatchClient.h"
 // [END DIVERGENCE]
 #include "HAL/PlatformProcess.h"
@@ -889,6 +890,12 @@ bool RunLFSCommand(const FString& InCommand, const FString& InRepositoryRoot, co
 // [DIVERGENCE]
 bool RunLfsLockOperation(const bool bInLock, const FString& InRepositoryRoot, const FString& InPathToGitBinary, const TArray<FString>& InRelativeFiles, TArray<FString>& OutInfoMessages, TArray<FString>& OutErrorMessages)
 {
+	if (!bInLock)
+	{
+		// A check out reports success before its background lock finishes. Unlocking first would find no lock, and the lock would land after.
+		GitBackgroundLock::WaitForBackgroundLocks(InRelativeFiles);
+	}
+
 	const GitLfsLockBatch::EOperation Operation = bInLock ? GitLfsLockBatch::EOperation::Lock : GitLfsLockBatch::EOperation::Unlock;
 	GitLfsLockBatchClient::FOutcome Outcome;
 	GitLfsLockBatchClient::Run(Operation, InPathToGitBinary, InRepositoryRoot, InRelativeFiles, Outcome);
@@ -2368,14 +2375,19 @@ bool UpdateCachedStates(const TMap<const FString, FGitState>& InResults)
 		{
 			State->State.LockState = NewState.LockState;
 			State->State.LockUser = NewState.LockUser;
-			// [DIVERGENCE] git-lfs's hooks only know locks taken through git lfs lock, so after a sync they can make a file
-			// locked through GitLfsCache's locks/batch read only again. Our lock means it is ours to edit.
-			if (NewState.LockState == ELockState::Locked && FPaths::FileExists(State->GetFilename()))
-			{
-				FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*State->GetFilename(), false);
-			}
-			// [END DIVERGENCE]
 		}
+		// [DIVERGENCE] git-lfs's hooks only know locks taken through git lfs lock, so after a sync they can make a file
+		// locked through GitLfsCache's locks/batch read only again. Our lock means it is ours to edit. Checked on the cached
+		// state, since a status update without lock information leaves the lock it already knows in place.
+		if (State->State.LockState == ELockState::Locked)
+		{
+			IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+			if (PlatformFile.IsReadOnly(*State->GetFilename()))
+			{
+				PlatformFile.SetReadOnly(*State->GetFilename(), false);
+			}
+		}
+		// [END DIVERGENCE]
 		if (NewState.RemoteState != ERemoteState::Unset)
 		{
 			State->State.RemoteState = NewState.RemoteState;

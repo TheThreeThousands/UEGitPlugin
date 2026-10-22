@@ -162,6 +162,44 @@ static FString GetStateUrl(bool& bOutFromUserOverride)
 	return Url;
 }
 
+bool IsBaseAmbiguous(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const FString& InBase, const TArray<FString>& InBranches, bool& bOutAmbiguous)
+{
+	bOutAmbiguous = false;
+	auto CountCommits = [&](const TArray<FString>& InExcluded, int32& OutCount)
+	{
+		TArray<FString> Parameters{ TEXT("--count"), TEXT("HEAD") };
+		for (const FString& Excluded : InExcluded)
+		{
+			Parameters.Add(TEXT("^") + Excluded);
+		}
+		TArray<FString> Results;
+		TArray<FString> Errors;
+		return GitSourceControlUtils::RunCommand(TEXT("rev-list"), InPathToGitBinary, InRepositoryRoot, Parameters, FGitSourceControlModule::GetEmptyStringArray(), Results, Errors)
+			&& Results.Num() > 0 && LexTryParseString(OutCount, *Results[0].TrimStartAndEnd());
+	};
+
+	// Usually nothing is unpushed, and one call settles it
+	int32 PastBase = 0;
+	if (!CountCommits({ InBase }, PastBase))
+	{
+		return false;
+	}
+	if (PastBase == 0 || InBranches.Num() == 0)
+	{
+		return true;
+	}
+
+	TArray<FString> Excluded{ InBase };
+	Excluded.Append(InBranches);
+	int32 OnNoBranch = 0;
+	if (!CountCommits(Excluded, OnNoBranch))
+	{
+		return false;
+	}
+	bOutAmbiguous = OnNoBranch < PastBase;
+	return true;
+}
+
 FString GetStateUrl()
 {
 	bool bFromUserOverride = false;
@@ -237,6 +275,14 @@ bool TryGetChangedFilesByBranch(const FString& InPathToGitBinary, const FString&
 	{
 		LogFallbackOnce(TEXT("could not find a pushed ancestor of HEAD"));
 		Timer.SetOutcome(TEXT("no base commit"));
+		return false;
+	}
+
+	bool bAmbiguousBase = false;
+	if (!IsBaseAmbiguous(InPathToGitBinary, InRepositoryRoot, Base, InBranches, bAmbiguousBase) || bAmbiguousBase)
+	{
+		LogFallbackOnce(TEXT("a status branch holds local commits the upstream does not, so the service's merge base is too old"));
+		Timer.SetOutcome(TEXT("ambiguous base"));
 		return false;
 	}
 
