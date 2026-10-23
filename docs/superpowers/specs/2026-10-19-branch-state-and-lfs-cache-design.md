@@ -263,7 +263,9 @@ service then returns every path changed on any requested branch relative to its 
 
 Fallback rules are Change 2's. `truncated: true` (more changed paths than the service's `MaxPathsPerRequest`,
 20,000 by default) is the expected large-repository failure and falls back to the local path for that call. The
-timeout stays 2 seconds: these requests run in the background, and a slow answer costs nothing an artist waits on.
+timeout is 10 seconds rather than 2. On a Knockout-sized repository the answer is about 26 MB and takes about 3
+seconds, so a 2 second limit failed every time, and three failures in a row also backed off the per-file requests.
+These requests run in the background, and the local path they replace takes tens of seconds.
 
 ### Configuration
 
@@ -271,8 +273,11 @@ In the game project's `DefaultEditor.ini`:
 
 ```ini
 [GitSourceControl]
-BranchStateCacheUrl=https://branchstate.example.com/v1/ado/myproject/_git/game
+BranchStateCacheUrl="https://branchstate.example.com/v1/ado/myproject/_git/game"
 ```
+
+The quotes are required. Unreal reads an unquoted `//` in an ini value as the start of a comment, which would leave
+only `https:`.
 
 Empty or missing means disabled. A per-user override in the source control settings ini (via
 `FGitSourceControlSettings`, no UI required) takes precedence when set, for testing against a local instance.

@@ -19,6 +19,13 @@ namespace
 	/** The status check this sits on blocks the editor, so a slow service must cost little before the local path runs */
 	constexpr float RequestTimeoutSeconds = 2.0f;
 
+	/**
+	 * A whole-tree answer names every changed path on every branch, which on a large repository is tens of megabytes and
+	 * takes about 3 seconds, so it would never fit the file limit. It runs at startup and on the background refresh, where
+	 * the local path it replaces takes tens of seconds.
+	 */
+	constexpr float WholeTreeRequestTimeoutSeconds = 10.0f;
+
 	/** Matches GitSourceControlConstants::MaxFilesPerBatch, which is private to GitSourceControlUtils.cpp */
 	constexpr int32 MaxFilesPerLsTree = 50;
 
@@ -224,7 +231,9 @@ bool TryGetChangedFilesByBranch(const FString& InPathToGitBinary, const FString&
 	// The artist's forge credential goes to this URL, so never over plain http except to a local test instance
 	if (!GitBranchStateCache::IsAllowedStateUrl(StateUrl, bFromUserOverride))
 	{
-		LogFallbackOnce(FString::Printf(TEXT("BranchStateCacheUrl must be https (%s)"), *GitBranchStateCache::StripUserInfo(StateUrl)));
+		// An unquoted // starts a comment in an ini file, which leaves only the scheme
+		const TCHAR* Hint = StateUrl.EndsWith(TEXT(":")) ? TEXT(". Put the URL in double quotes, because an unquoted // starts a comment in an ini file") : TEXT("");
+		LogFallbackOnce(FString::Printf(TEXT("BranchStateCacheUrl must be https (%s)%s"), *GitBranchStateCache::StripUserInfo(StateUrl), Hint));
 		Timer.SetOutcome(TEXT("URL not allowed"));
 		return false;
 	}
@@ -298,7 +307,7 @@ bool TryGetChangedFilesByBranch(const FString& InPathToGitBinary, const FString&
 	const FString Authorization = GitServiceHttp::BasicAuthorization(UserName, Password);
 	const FString Body = GitBranchStateCache::BuildStateRequestBody(Base, InBranches, RelativeFiles, !bWholeTree);
 
-	const GitServiceHttp::FPostResult Post = GitServiceHttp::PostJson(StateUrl + TEXT("/state"), Authorization, Body, RequestTimeoutSeconds);
+	const GitServiceHttp::FPostResult Post = GitServiceHttp::PostJson(StateUrl + TEXT("/state"), Authorization, Body, bWholeTree ? WholeTreeRequestTimeoutSeconds : RequestTimeoutSeconds);
 	if (!Post.bResponded)
 	{
 		{
