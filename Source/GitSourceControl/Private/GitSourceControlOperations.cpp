@@ -201,7 +201,12 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 	}
 	else
 	{
-		InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+		// [DIVERGENCE] RunCommand replaces the array it is given, so refreshing into ErrorMessages would drop each file's reason for the failure
+		// InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+		TArray<FString> RefreshErrors;
+		InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, RefreshErrors, States);
+		InCommand.ResultInfo.ErrorMessages += RefreshErrors;
+		// [END DIVERGENCE]
 	}
 
 	return InCommand.bCommandSuccessful;
@@ -455,7 +460,12 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 
 						if (!bUnlockSuccess)
 						{
-							InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+							// [DIVERGENCE] RunCommand replaces the array it is given, so refreshing into ErrorMessages would drop each file's reason for the failure
+							// InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+							TArray<FString> RefreshErrors;
+							InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, RefreshErrors, States);
+							InCommand.ResultInfo.ErrorMessages += RefreshErrors;
+							// [END DIVERGENCE]
 						}
 					}
 				}
@@ -703,7 +713,12 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 			}
 			else
 			{
-				InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(LockedFiles, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+				// [DIVERGENCE] RunCommand replaces the array it is given, so refreshing into ErrorMessages would drop each file's reason for the failure
+				// InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(LockedFiles, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+				TArray<FString> RefreshErrors;
+				InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(LockedFiles, InCommand.PathToGitRoot, InCommand.PathToGitBinary, RefreshErrors, States);
+				InCommand.ResultInfo.ErrorMessages += RefreshErrors;
+				// [END DIVERGENCE]
 			}
 		}
 	}
