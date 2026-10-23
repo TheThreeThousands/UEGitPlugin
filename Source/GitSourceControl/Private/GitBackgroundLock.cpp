@@ -111,6 +111,8 @@ namespace GitBackgroundLock
 			FText::FromString(FString::Join(FailedFiles, TEXT("\n"))), FText::FromString(Reason));
 		if (FMessageDialog::Open(EAppMsgType::YesNo, Message) == EAppReturnType::Yes)
 		{
+			// Revert picks what to restore from the cached state, which may predate the save that modified the file
+			ISourceControlModule::Get().GetProvider().Execute(ISourceControlOperation::Create<FUpdateStatus>(), FailedFiles, EConcurrency::Synchronous);
 #if ENGINE_MAJOR_VERSION >= 5
 			// Unload first and reload after, or the next save writes the in-memory change straight back
 			USourceControlHelpers::RevertAndReloadPackages(FailedFiles);
