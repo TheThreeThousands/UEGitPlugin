@@ -35,4 +35,8 @@ FString BasicAuthorization(const FString& InUserName, const FString& InPassword)
 /** True while a request is waiting for a response. Engines without HTTP thread completion need the HTTP manager ticked meanwhile. */
 bool IsRequestInFlight();
 
+/** While set, requests in flight are cancelled and new ones fail at once. Set while the provider closes, so its background work ends quickly. */
+void SetRequestsCancelled(bool bInCancelled);
+bool AreRequestsCancelled();
+
 }

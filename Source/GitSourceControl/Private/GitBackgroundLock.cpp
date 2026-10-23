@@ -1,11 +1,13 @@
 #include "GitBackgroundLock.h"
 
 #include "Async/Async.h"
+#include "Containers/Ticker.h"
 #include "GitSourceControlLog.h"
 #include "GitSourceControlModule.h"
 #include "GitSourceControlProvider.h"
 #include "GitSourceControlState.h"
 #include "GitSourceControlUtils.h"
+#include "GitServiceHttp.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
 #include "HAL/ThreadSafeCounter.h"
@@ -24,6 +26,26 @@ namespace GitBackgroundLock
 	static FCriticalSection RegistryCriticalSection;
 	static FLockOperationRegistry Registry;
 	static FThreadSafeCounter RunningLocks;
+
+	/** A failed background lock waiting for the game thread to correct the cache and ask about reverting */
+	struct FLockFailure
+	{
+		TArray<FString> RelativeFiles;
+		TArray<FString> AbsoluteFiles;
+		uint64 Ticket = 0;
+		TArray<FString> FailedFiles;
+		FString Reason;
+		TMap<const FString, FGitState> FailureStates;
+	};
+
+	/** Plain data rather than queued game thread tasks, so closing the provider leaves no plugin code waiting to run */
+	static TArray<FLockFailure> PendingFailures;
+
+#if ENGINE_MAJOR_VERSION >= 5
+	static FTSTicker::FDelegateHandle FailureTickerHandle;
+#else
+	static FDelegateHandle FailureTickerHandle;
+#endif
 
 	/** How long an unlock waits for a background lock of the same file before going ahead anyway */
 	static constexpr double MaxWaitForBackgroundLockSeconds = 120.0;
@@ -133,34 +155,62 @@ namespace GitBackgroundLock
 		TArray<FString> FailedFiles;
 		TMap<const FString, FGitState> FailureStates = BuildLockFailureStates(RefreshedStates, AbsoluteFiles, FailedFiles);
 
-		const FString Reason = FString::Join(ErrorMessages, TEXT("\n"));
-		AsyncTask(ENamedThreads::GameThread, [RelativeFiles, AbsoluteFiles, Ticket, FailedFiles, Reason, FailureStates = MoveTemp(FailureStates)]() mutable
-		{
-			FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
-			if (GitSourceControl == nullptr || !GitSourceControl->GetProvider().IsAvailable())
-			{
-				return;
-			}
+		FLockFailure Failure;
+		Failure.RelativeFiles = RelativeFiles;
+		Failure.AbsoluteFiles = AbsoluteFiles;
+		Failure.Ticket = Ticket;
+		Failure.FailedFiles = MoveTemp(FailedFiles);
+		Failure.Reason = FString::Join(ErrorMessages, TEXT("\n"));
+		Failure.FailureStates = MoveTemp(FailureStates);
+		FScopeLock Lock(&RegistryCriticalSection);
+		PendingFailures.Add(MoveTemp(Failure));
+	}
 
+	/**
+	 * Runs on the game thread from the core ticker, which the main loop ticks but a synchronous source control command's
+	 * wait loop and a modal dialog do not, so the revert prompt never opens inside another command.
+	 */
+	static bool ProcessLockFailures(float DeltaTime)
+	{
+		TArray<FLockFailure> Failures;
+		{
+			FScopeLock Lock(&RegistryCriticalSection);
+			if (PendingFailures.Num() == 0)
+			{
+				return true;
+			}
+			Failures = MoveTemp(PendingFailures);
+			PendingFailures.Reset();
+		}
+
+		FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
+		if (GitSourceControl == nullptr || !GitSourceControl->GetProvider().IsAvailable())
+		{
+			return true;
+		}
+
+		for (FLockFailure& Failure : Failures)
+		{
 			// A revert, check in or lock that ran since this lock owns the file's lock state now
 			{
 				FScopeLock Lock(&RegistryCriticalSection);
-				for (int32 Index = 0; Index < RelativeFiles.Num(); ++Index)
+				for (int32 Index = 0; Index < Failure.RelativeFiles.Num(); ++Index)
 				{
-					if (!Registry.IsLatest(RelativeFiles[Index], Ticket))
+					if (!Registry.IsLatest(Failure.RelativeFiles[Index], Failure.Ticket))
 					{
-						FailureStates.Remove(AbsoluteFiles[Index]);
-						FailedFiles.Remove(AbsoluteFiles[Index]);
+						Failure.FailureStates.Remove(Failure.AbsoluteFiles[Index]);
+						Failure.FailedFiles.Remove(Failure.AbsoluteFiles[Index]);
 					}
 				}
 			}
 
-			GitSourceControlUtils::UpdateCachedStates(FailureStates);
-			if (FailedFiles.Num() > 0)
+			GitSourceControlUtils::UpdateCachedStates(Failure.FailureStates);
+			if (Failure.FailedFiles.Num() > 0)
 			{
-				AskToRevertUnlockedFiles(FailedFiles, Reason);
+				AskToRevertUnlockedFiles(Failure.FailedFiles, Failure.Reason);
 			}
-		});
+		}
+		return true;
 	}
 
 	bool CanLockInBackground(const FString& PathToGitRoot, const FString& PathToGitBinary, const TArray<FString>& AbsoluteFiles, FString& OutReason)
@@ -257,7 +307,8 @@ namespace GitBackgroundLock
 				FScopeLock Lock(&RegistryCriticalSection);
 				Registry.EndBackgroundLock(Ticket);
 			}
-			if (!bLocked)
+			// A closing provider drops the failure rather than listing locks and queueing a prompt nobody will see
+			if (!bLocked && !GitServiceHttp::AreRequestsCancelled())
 			{
 				HandleLockFailure(PathToGitRoot, PathToGitBinary, RelativeFiles, ErrorMessages, Ticket);
 			}
@@ -292,10 +343,38 @@ namespace GitBackgroundLock
 		return RunningLocks.GetValue();
 	}
 
+	void Start()
+	{
+		GitServiceHttp::SetRequestsCancelled(false);
+		if (!FailureTickerHandle.IsValid())
+		{
+#if ENGINE_MAJOR_VERSION >= 5
+			FailureTickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateStatic(&ProcessLockFailures));
+#else
+			FailureTickerHandle = FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateStatic(&ProcessLockFailures));
+#endif
+		}
+	}
+
+	void BeginShutdown()
+	{
+		GitServiceHttp::SetRequestsCancelled(true);
+		if (FailureTickerHandle.IsValid())
+		{
+#if ENGINE_MAJOR_VERSION >= 5
+			FTSTicker::GetCoreTicker().RemoveTicker(FailureTickerHandle);
+#else
+			FTicker::GetCoreTicker().RemoveTicker(FailureTickerHandle);
+#endif
+			FailureTickerHandle.Reset();
+		}
+	}
+
 	void ForgetLocks()
 	{
 		FScopeLock Lock(&RegistryCriticalSection);
 		Registry.Reset();
+		PendingFailures.Reset();
 	}
 }
 
