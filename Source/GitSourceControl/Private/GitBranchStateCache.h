@@ -98,6 +98,12 @@ TMap<FString, FString> ComputeNewerFiles(const FStateResponse& InResponse, const
  */
 bool AnswersForBranch(const FStateResponse& InResponse, const FString& InBranch);
 
+/**
+ * True when the answer leaves out the current remote branch or any requested status branch, with the first such name in
+ * OutMissing. An omitted status branch would read as unchanged, hiding a newer version there that the local diff finds.
+ */
+bool FindMissingBranch(const FStateResponse& InResponse, const TArray<FString>& InBranches, const FString& InCurrentRemoteBranch, FString& OutMissing);
+
 /** Stops asking an unreachable service for a while, so a dead service does not cost every status check a connection attempt */
 class FBackoff
 {

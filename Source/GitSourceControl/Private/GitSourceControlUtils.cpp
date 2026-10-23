@@ -16,6 +16,7 @@
 #include "GitBranchStateCacheClient.h"
 #include "GitBackgroundLock.h"
 #include "GitLfsLockBatchClient.h"
+#include "GitServiceHttp.h"
 // [END DIVERGENCE]
 #include "HAL/PlatformProcess.h"
 
@@ -925,6 +926,20 @@ bool RunLfsLockOperation(const bool bInLock, const FString& InRepositoryRoot, co
 			bAllSucceeded = false;
 			OutErrorMessages.Add(FString::Printf(TEXT("%s: %s"), *Result.Path, *Result.Message));
 		}
+	}
+
+	if (GitServiceHttp::AreRequestsCancelled())
+	{
+		// The provider is closing and waits for this, so start no git lfs process for what the batch did not settle
+		for (const FString& RelativeFile : Outcome.NotAsked)
+		{
+			OutErrorMessages.Add(FString::Printf(TEXT("%s: cancelled because the editor is closing"), *RelativeFile));
+		}
+		for (const FString& RelativeFile : Outcome.Unknown)
+		{
+			OutErrorMessages.Add(FString::Printf(TEXT("%s: cancelled because the editor is closing"), *RelativeFile));
+		}
+		return bAllSucceeded && Outcome.NotAsked.Num() == 0 && Outcome.Unknown.Num() == 0;
 	}
 
 	TArray<FString> StockFiles = MoveTemp(Outcome.NotAsked);

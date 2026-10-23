@@ -355,11 +355,12 @@ bool TryGetChangedFilesByBranch(const FString& InPathToGitBinary, const FString&
 		Timer.SetOutcome(Reason);
 		return false;
 	}
-	if (!GitBranchStateCache::AnswersForBranch(Response, InCurrentRemoteBranch))
+	FString MissingBranch;
+	if (GitBranchStateCache::FindMissingBranch(Response, InBranches, InCurrentRemoteBranch, MissingBranch))
 	{
-		// Status branches missing from the mirror are fine to skip, but the current branch carries every NotAtHead
-		LogFallbackOnce(FString::Printf(TEXT("the service does not know %s yet"), *InCurrentRemoteBranch));
-		Timer.SetOutcome(TEXT("current branch missing"));
+		// The local path diffs every status branch, so one the mirror has not fetched yet must not read as unchanged
+		LogFallbackOnce(FString::Printf(TEXT("the service does not know %s yet"), *MissingBranch));
+		Timer.SetOutcome(TEXT("requested branch missing"));
 		return false;
 	}
 

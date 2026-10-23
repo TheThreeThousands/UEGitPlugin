@@ -410,6 +410,21 @@ bool FGitBranchStateCacheMissingCurrentBranchTest::RunTest(const FString& Parame
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitBranchStateCacheMissingStatusBranchTest, "GitSourceControl.BranchStateCache.Parse.MissingStatusBranch", GIT_BRANCH_STATE_TEST_FLAGS)
+bool FGitBranchStateCacheMissingStatusBranchTest::RunTest(const FString& Parameters)
+{
+	FStateResponse Response;
+	Response.BranchNames = { TEXT("origin/main"), TEXT("origin/KO-1") };
+	FString Missing;
+	TestFalse(TEXT("Every requested branch answered"), FindMissingBranch(Response, { TEXT("origin/KO-1"), TEXT("origin/main") }, TEXT("origin/main"), Missing));
+	TestTrue(TEXT("A status branch the mirror has not fetched"), FindMissingBranch(Response, { TEXT("origin/KO-1"), TEXT("origin/KO-2") }, TEXT("origin/main"), Missing));
+	TestEqual(TEXT("Names the missing status branch"), Missing, FString(TEXT("origin/KO-2")));
+	TestTrue(TEXT("The current branch missing"), FindMissingBranch(Response, { TEXT("origin/KO-1") }, TEXT("origin/KO-3"), Missing));
+	TestEqual(TEXT("Names the missing current branch"), Missing, FString(TEXT("origin/KO-3")));
+	TestFalse(TEXT("No current remote branch to check"), FindMissingBranch(Response, { TEXT("origin/KO-1") }, FString(), Missing));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGitBranchStateCacheAmbiguousBaseTest, "GitSourceControl.BranchStateCache.Base.AmbiguousWhenBranchHasLocalCommits", GIT_BRANCH_STATE_TEST_FLAGS)
 bool FGitBranchStateCacheAmbiguousBaseTest::RunTest(const FString& Parameters)
 {

@@ -2,6 +2,7 @@
 
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
+#include "HAL/ThreadSafeBool.h"
 #include "HAL/ThreadSafeCounter.h"
 #include "HttpManager.h"
 #include "HttpModule.h"
@@ -30,6 +31,8 @@ namespace
 	constexpr double CredentialTimeoutSeconds = 5.0;
 
 	FThreadSafeCounter RequestsInFlight;
+
+	FThreadSafeBool bRequestsCancelled;
 }
 
 FPostResult PostJson(const FString& InUrl, const FString& InAuthorization, const FString& InBody, const float InTimeoutSeconds)
@@ -54,9 +57,9 @@ FPostResult PostJson(const FString& InUrl, const FString& InAuthorization, const
 		RequestsInFlight.Decrement();
 	};
 
-	if (!Request->ProcessRequest())
+	if (bRequestsCancelled || !Request->ProcessRequest())
 	{
-		Result.Error = TEXT("request could not be started");
+		Result.Error = bRequestsCancelled ? TEXT("cancelled") : TEXT("request could not be started");
 		return Result;
 	}
 
@@ -66,6 +69,12 @@ FPostResult PostJson(const FString& InUrl, const FString& InAuthorization, const
 		if (IsInGameThread())
 		{
 			FHttpModule::Get().GetHttpManager().Tick(0.0f);
+		}
+		if (bRequestsCancelled)
+		{
+			Request->CancelRequest();
+			Result.Error = TEXT("cancelled");
+			return Result;
 		}
 		if (FPlatformTime::Seconds() > DeadlineSeconds)
 		{
@@ -183,6 +192,16 @@ FString BasicAuthorization(const FString& InUserName, const FString& InPassword)
 bool IsRequestInFlight()
 {
 	return RequestsInFlight.GetValue() > 0;
+}
+
+void SetRequestsCancelled(const bool bInCancelled)
+{
+	bRequestsCancelled = bInCancelled;
+}
+
+bool AreRequestsCancelled()
+{
+	return bRequestsCancelled;
 }
 
 }

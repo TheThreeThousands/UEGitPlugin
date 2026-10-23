@@ -441,6 +441,24 @@ bool AnswersForBranch(const FStateResponse& InResponse, const FString& InBranch)
 	return InBranch.IsEmpty() || InResponse.BranchNames.Contains(InBranch);
 }
 
+bool FindMissingBranch(const FStateResponse& InResponse, const TArray<FString>& InBranches, const FString& InCurrentRemoteBranch, FString& OutMissing)
+{
+	if (!AnswersForBranch(InResponse, InCurrentRemoteBranch))
+	{
+		OutMissing = InCurrentRemoteBranch;
+		return true;
+	}
+	for (const FString& Branch : InBranches)
+	{
+		if (!AnswersForBranch(InResponse, Branch))
+		{
+			OutMissing = Branch;
+			return true;
+		}
+	}
+	return false;
+}
+
 FBackoff::FBackoff(const double InBackoffSeconds, const int32 InTimeoutsBeforeBackoff)
 	: BackoffSeconds(InBackoffSeconds)
 	, TimeoutsBeforeBackoff(InTimeoutsBeforeBackoff)

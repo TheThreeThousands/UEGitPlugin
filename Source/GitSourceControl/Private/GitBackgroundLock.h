@@ -62,7 +62,16 @@ namespace GitBackgroundLock
 	/** Background locks still running on the thread pool, which the provider waits for when it closes */
 	int32 NumRunningLocks();
 
-	/** Forgets every registered lock, including any whose check out never reached LockFiles. Called when the provider closes. */
+	/** Starts handling failed background locks on the game thread. Called when the provider initializes. */
+	void Start();
+
+	/**
+	 * Cancels the HTTP requests of background locks still running, so they finish quickly without falling back to git lfs,
+	 * and stops handling failures. The provider then waits for NumRunningLocks to reach zero.
+	 */
+	void BeginShutdown();
+
+	/** Forgets every registered lock and failure, including any whose check out never reached LockFiles. Called when the provider closes. */
 	void ForgetLocks();
 
 	/**

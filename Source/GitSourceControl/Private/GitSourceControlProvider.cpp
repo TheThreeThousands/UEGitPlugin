@@ -65,6 +65,10 @@ void FGitSourceControlProvider::Init(bool bForceConnection)
 		CheckGitAvailability();
 	}
 
+	// [DIVERGENCE] Handles failed background locks on the game thread, and lets requests run again after a Close
+	GitBackgroundLock::Start();
+	// [END DIVERGENCE]
+
 #if ENGINE_MAJOR_VERSION == 5
 	UPackage::PackageSavedWithContextEvent.AddStatic(&GitSourceControlUtils::UpdateFileStagingOnSaved);
 #endif
@@ -266,9 +270,10 @@ int32 FGitSourceControlProvider::GetNumLastErrors() const
 
 void FGitSourceControlProvider::Close()
 {
-	// [DIVERGENCE] A background lock still running would otherwise outlive the provider, or the module once it unloads
-	const double DrainStartSeconds = FPlatformTime::Seconds();
-	while (GitBackgroundLock::NumRunningLocks() > 0 && FPlatformTime::Seconds() - DrainStartSeconds < 30.0)
+	// [DIVERGENCE] A background lock still running would otherwise outlive the provider, or the module once it unloads.
+	// Cancelling its request ends it quickly, so wait for it to finish rather than for a fixed time.
+	GitBackgroundLock::BeginShutdown();
+	while (GitBackgroundLock::NumRunningLocks() > 0)
 	{
 #if !GIT_SYNC_LOOP_HAS_HTTP_THREAD_COMPLETION
 		if (GitServiceHttp::IsRequestInFlight())
