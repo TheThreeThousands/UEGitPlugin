@@ -30,7 +30,10 @@ class FGitSourceControlWorker : public IGitSourceControlWorker
 public:
 	virtual ~FGitSourceControlWorker() {}
 
-	virtual bool UpdateStates() const final;
+	// [DIVERGENCE] The check out worker starts its background lock once its states are in the cache
+	// virtual bool UpdateStates() const final;
+	virtual bool UpdateStates() const override;
+	// [END DIVERGENCE]
 
 	protected:
 	/** Temporary states for results */
@@ -57,6 +60,16 @@ public:
 	// IGitSourceControlWorker interface
 	virtual FName GetName() const override;
 	virtual bool Execute(class FGitSourceControlCommand& InCommand) override;
+	// [DIVERGENCE] Publishes the optimistic Locked states, then starts the background lock, so a failure's correction lands after them
+	virtual bool UpdateStates() const override;
+
+private:
+	/** Non-zero when Execute registered a background lock that UpdateStates starts */
+	uint64 BackgroundLockTicket = 0;
+	FString BackgroundLockGitRoot;
+	FString BackgroundLockGitBinary;
+	TArray<FString> BackgroundLockFiles;
+	// [END DIVERGENCE]
 };
 
 /** Commit (check-in) a set of files to the local depot. */

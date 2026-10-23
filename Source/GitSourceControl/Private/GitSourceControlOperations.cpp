@@ -13,6 +13,10 @@
 #include "GitSourceControlCommand.h"
 #include "GitSourceControlUtils.h"
 #include "GitSourceControlState.h"
+// [DIVERGENCE]
+#include "GitBackgroundLock.h"
+#include "GitSourceControlLog.h"
+// [END DIVERGENCE]
 #include "SourceControlHelpers.h"
 #include "Logging/MessageLog.h"
 #include "Misc/MessageDialog.h"
@@ -150,10 +154,6 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 		return InCommand.bCommandSuccessful;
 	}
 
-	const bool bSuccess = GitSourceControlUtils::RunLFSCommand(TEXT("lock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), LockableRelativeFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-	InCommand.bCommandSuccessful = bSuccess;
-	const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
-
 	TArray<FString> AbsoluteFiles;
 	AbsoluteFiles.Reserve(LockableRelativeFiles.Num());
 	FString GitPath = InCommand.PathToGitRoot;
@@ -163,6 +163,30 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 			FPaths::NormalizeFilename(AbsoluteFilePath);
 			return AbsoluteFilePath;
 		});
+
+	// [DIVERGENCE] Lock in the background when a quick check says the lock will succeed, so moving an actor does not wait on
+	// git lfs lock. A failed background lock asks the user to revert or keep the change. Anything else takes the blocking path.
+	// const bool bSuccess = GitSourceControlUtils::RunLFSCommand(TEXT("lock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), LockableRelativeFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+	FString BlockingLockReason;
+	const bool bLockInBackground = GitBackgroundLock::CanLockInBackground(InCommand.PathToGitRoot, InCommand.PathToGitBinary, AbsoluteFiles, BlockingLockReason);
+	if (bLockInBackground)
+	{
+		// Registered now so an unlock of these files waits for it, but started from UpdateStates
+		UE_LOG(LogGitSourceControl, Log, TEXT("[%s] Locking %d files in the background"), GitSourceControlLog::GetThreadLabel(), LockableRelativeFiles.Num());
+		BackgroundLockTicket = GitBackgroundLock::RegisterLock(LockableRelativeFiles);
+		BackgroundLockGitRoot = InCommand.PathToGitRoot;
+		BackgroundLockGitBinary = InCommand.PathToGitBinary;
+		BackgroundLockFiles = LockableRelativeFiles;
+	}
+	else
+	{
+		UE_LOG(LogGitSourceControl, Log, TEXT("[%s] Locking %d files and waiting: %s"), GitSourceControlLog::GetThreadLabel(), LockableRelativeFiles.Num(), *BlockingLockReason);
+		GitBackgroundLock::WaitForBackgroundLocks(LockableRelativeFiles);
+	}
+	const bool bSuccess = bLockInBackground || GitSourceControlUtils::RunLfsLockOperation(true, InCommand.PathToGitRoot, InCommand.PathToGitBinary, LockableRelativeFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+	// [END DIVERGENCE]
+	InCommand.bCommandSuccessful = bSuccess;
+	const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
 
 	if (bSuccess)
 	{
@@ -177,11 +201,28 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 	}
 	else
 	{
-		InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+		// [DIVERGENCE] RunCommand replaces the array it is given, so refreshing into ErrorMessages would drop each file's reason for the failure
+		// InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+		TArray<FString> RefreshErrors;
+		InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, RefreshErrors, States);
+		InCommand.ResultInfo.ErrorMessages += RefreshErrors;
+		// [END DIVERGENCE]
 	}
 
 	return InCommand.bCommandSuccessful;
 }
+
+// [DIVERGENCE] Runs on the game thread once the command finished
+bool FGitCheckOutWorker::UpdateStates() const
+{
+	const bool bUpdated = FGitSourceControlWorker::UpdateStates();
+	if (BackgroundLockTicket != 0)
+	{
+		GitBackgroundLock::LockFiles(BackgroundLockGitRoot, BackgroundLockGitBinary, BackgroundLockFiles, BackgroundLockTicket);
+	}
+	return bUpdated;
+}
+// [END DIVERGENCE]
 
 static FText ParseCommitResults(const TArray<FString>& InResults)
 {
@@ -409,13 +450,22 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 					if (FilesToUnlock.Num() > 0)
 					{
 						// Not strictly necessary to succeed, so don't update command success
-						const bool bUnlockSuccess = GitSourceControlUtils::RunLFSCommand(TEXT("unlock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary,
-							FGitSourceControlModule::GetEmptyStringArray(), FilesToUnlock,
+						// [DIVERGENCE] One request for every file through GitLfsCache when it offers locks/batch
+						// const bool bUnlockSuccess = GitSourceControlUtils::RunLFSCommand(TEXT("unlock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary,
+						// 	FGitSourceControlModule::GetEmptyStringArray(), FilesToUnlock,
+						// 	InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+						const bool bUnlockSuccess = GitSourceControlUtils::RunLfsLockOperation(false, InCommand.PathToGitRoot, InCommand.PathToGitBinary, FilesToUnlock,
 							InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+						// [END DIVERGENCE]
 
 						if (!bUnlockSuccess)
 						{
-							InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+							// [DIVERGENCE] RunCommand replaces the array it is given, so refreshing into ErrorMessages would drop each file's reason for the failure
+							// InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+							TArray<FString> RefreshErrors;
+							InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(InCommand.Files, InCommand.PathToGitRoot, InCommand.PathToGitBinary, RefreshErrors, States);
+							InCommand.ResultInfo.ErrorMessages += RefreshErrors;
+							// [END DIVERGENCE]
 						}
 					}
 				}
@@ -644,8 +694,12 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 			// TODO: Can we actually run "unlock" on multiple files in one command?
 			// This seems like a bug
 			const TArray<FString>& RelativeFiles = GitSourceControlUtils::RelativeFilenames(LockedFiles, InCommand.PathToGitRoot);
-			InCommand.bCommandSuccessful &= GitSourceControlUtils::RunLFSCommand(TEXT("unlock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), RelativeFiles,
-																				 InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+			// [DIVERGENCE] One request for every file through GitLfsCache when it offers locks/batch
+			// InCommand.bCommandSuccessful &= GitSourceControlUtils::RunLFSCommand(TEXT("unlock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), RelativeFiles,
+			// 																	 InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+			InCommand.bCommandSuccessful &= GitSourceControlUtils::RunLfsLockOperation(false, InCommand.PathToGitRoot, InCommand.PathToGitBinary, RelativeFiles,
+																					   InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+			// [END DIVERGENCE]
 			if (InCommand.bCommandSuccessful)
 			{
 				for (const FString& AboluteFile : LockedFiles)
@@ -659,7 +713,12 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 			}
 			else
 			{
-				InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(LockedFiles, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+				// [DIVERGENCE] RunCommand replaces the array it is given, so refreshing into ErrorMessages would drop each file's reason for the failure
+				// InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(LockedFiles, InCommand.PathToGitRoot, InCommand.PathToGitBinary, InCommand.ResultInfo.ErrorMessages, States);
+				TArray<FString> RefreshErrors;
+				InCommand.bCommandSuccessful &= GitSourceControlUtils::RefreshLocks(LockedFiles, InCommand.PathToGitRoot, InCommand.PathToGitBinary, RefreshErrors, States);
+				InCommand.ResultInfo.ErrorMessages += RefreshErrors;
+				// [END DIVERGENCE]
 			}
 		}
 	}

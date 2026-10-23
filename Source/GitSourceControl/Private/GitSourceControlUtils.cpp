@@ -9,6 +9,14 @@
 #include "GitSourceControlCommand.h"
 #include "GitSourceControlModule.h"
 #include "GitSourceControlProvider.h"
+// [DIVERGENCE]
+#include "GitSourceControlLog.h"
+#include "HAL/PlatformTime.h"
+#include "Algo/AnyOf.h"
+#include "GitBranchStateCacheClient.h"
+#include "GitBackgroundLock.h"
+#include "GitLfsLockBatchClient.h"
+// [END DIVERGENCE]
 #include "HAL/PlatformProcess.h"
 
 #include "HAL/PlatformFile.h"
@@ -262,7 +270,12 @@ bool RunCommandInternalRaw(const FString& InCommand, const FString& InPathToGitB
 	}
 #endif
 
+	// [DIVERGENCE] Log how long every git process takes, so slow status checks can be diagnosed from the output log
+	const double GitStartTimeSeconds = FPlatformTime::Seconds();
 	FPlatformProcess::ExecProcess(*PathToGitOrEnvBinary, *FullCommand, &ReturnCode, &OutResults, &OutErrors);
+	UE_LOG(LogGitSourceControl, Log, TEXT("[%s] git %s took %.1f ms (return code %d)"), GitSourceControlLog::GetThreadLabel(),
+		*GitSourceControlLog::Truncate(GitSourceControlLog::RedactUserInfo(LogableCommand)), (FPlatformTime::Seconds() - GitStartTimeSeconds) * 1000.0, ReturnCode);
+	// [END DIVERGENCE]
 
 #if UE_BUILD_DEBUG
 	// TODO: add a setting to easily enable Verbose logging
@@ -874,6 +887,90 @@ bool RunLFSCommand(const FString& InCommand, const FString& InRepositoryRoot, co
 	return GitSourceControlUtils::RunCommand(Command, LFSLockBinary, InRepositoryRoot, InParameters, InFiles, OutResults, OutErrorMessages);
 }
 
+// [DIVERGENCE]
+bool RunLfsLockOperation(const bool bInLock, const FString& InRepositoryRoot, const FString& InPathToGitBinary, const TArray<FString>& InRelativeFiles, TArray<FString>& OutInfoMessages, TArray<FString>& OutErrorMessages)
+{
+	if (!bInLock)
+	{
+		// A check out reports success before its background lock finishes. Unlocking first would find no lock, and the lock would land after.
+		GitBackgroundLock::WaitForBackgroundLocks(InRelativeFiles);
+	}
+
+	const GitLfsLockBatch::EOperation Operation = bInLock ? GitLfsLockBatch::EOperation::Lock : GitLfsLockBatch::EOperation::Unlock;
+	GitLfsLockBatchClient::FOutcome Outcome;
+	GitLfsLockBatchClient::Run(Operation, InPathToGitBinary, InRepositoryRoot, InRelativeFiles, Outcome);
+
+	// git lfs lock makes a lockable file writable and git lfs unlock makes it read only again, so do what it would have done
+	const bool bMakeReadOnlyOnUnlock = GitLfsLockBatchClient::SetsLockableReadOnly();
+	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+	auto ApplySucceeded = [&](const FString& RelativeFile)
+	{
+		const FString AbsoluteFile = FPaths::Combine(InRepositoryRoot, RelativeFile);
+		if (PlatformFile.FileExists(*AbsoluteFile) && (bInLock || (bMakeReadOnlyOnUnlock && IsFileLFSLockable(RelativeFile))))
+		{
+			PlatformFile.SetReadOnly(*AbsoluteFile, !bInLock);
+		}
+		OutInfoMessages.Add(FString::Printf(TEXT("%s %s"), bInLock ? TEXT("Locked") : TEXT("Unlocked"), *RelativeFile));
+	};
+
+	bool bAllSucceeded = true;
+	for (const GitLfsLockBatch::FItemResult& Result : Outcome.Answered)
+	{
+		if (Result.bOk)
+		{
+			ApplySucceeded(Result.Path);
+		}
+		else
+		{
+			bAllSucceeded = false;
+			OutErrorMessages.Add(FString::Printf(TEXT("%s: %s"), *Result.Path, *Result.Message));
+		}
+	}
+
+	TArray<FString> StockFiles = MoveTemp(Outcome.NotAsked);
+	if (Outcome.Unknown.Num() > 0)
+	{
+		// A batch that timed out may have been carried out in part, and git lfs fails on locks it finds already taken or
+		// already released, so ask who holds what and leave the stock command only what is still to do
+		TArray<FString> Locks;
+		TArray<FString> ListErrors;
+		const FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
+		if (GitSourceControl && RunLFSCommand(TEXT("locks"), InRepositoryRoot, InPathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), FGitSourceControlModule::GetEmptyStringArray(), Locks, ListErrors))
+		{
+			const FString LockUser = GitSourceControl->GetProvider().GetLockUser();
+			TSet<FString> HeldByUser;
+			for (const FString& Lock : Locks)
+			{
+				const FGitLfsLocksParser LockInfo(InRepositoryRoot, Lock, false);
+				if (LockInfo.LockUser == LockUser)
+				{
+					HeldByUser.Add(LockInfo.LocalFilename);
+				}
+			}
+			const TArray<FString> Remaining = GitLfsLockBatch::RemainingAfterUnknownOutcome(Operation, Outcome.Unknown, HeldByUser);
+			for (const FString& RelativeFile : Outcome.Unknown)
+			{
+				if (!Remaining.Contains(RelativeFile))
+				{
+					ApplySucceeded(RelativeFile);
+				}
+			}
+			StockFiles.Append(Remaining);
+		}
+		else
+		{
+			StockFiles.Append(Outcome.Unknown);
+		}
+	}
+
+	if (StockFiles.Num() > 0)
+	{
+		bAllSucceeded &= RunLFSCommand(bInLock ? TEXT("lock") : TEXT("unlock"), InRepositoryRoot, InPathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), StockFiles, OutInfoMessages, OutErrorMessages);
+	}
+	return bAllSucceeded;
+}
+// [END DIVERGENCE]
+
 // Run a Git "commit" command by batches
 bool RunCommit(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& InParameters, const TArray<FString>& InFiles,
 			   TArray<FString>& OutResults, TArray<FString>& OutErrorMessages)
@@ -1357,6 +1454,16 @@ void ParseStatusResults(const FString& InPathToGitBinary, const FString& InRepos
 	ParseFileStatusResult(InPathToGitBinary, InRepositoryRoot, InUsingLfsLocking, Files, InResults, OutStates);
 }
 
+// [DIVERGENCE] True when any path is an existing directory, i.e. a wholesale refresh rather than a file-level update
+static bool ContainsDirectory(const TArray<FString>& InPaths)
+{
+	return Algo::AnyOf(InPaths, [](const FString& Path)
+	{
+		return FPaths::DirectoryExists(Path);
+	});
+}
+// [END DIVERGENCE]
+
 void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& Files,
 				 TArray<FString>& OutErrorMessages, TMap<FString, FGitSourceControlState>& OutStates)
 {
@@ -1434,6 +1541,50 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	const FString AbsoluteBinariesDirPath = FPaths::Combine(AbsoluteProjectDirPath, "Binaries/");
 	const FString AbsoluteChecksumFilePath = FPaths::Combine(AbsoluteProjectDirPath, ".checksum");
 
+	// [DIVERGENCE] Shared by the local git path below and the GitBranchStateCache path, so both apply the same filtering
+	auto ApplyChangedFiles = [&](const FString& Branch, const TArray<FString>& ChangedRelativeFiles)
+	{
+		const bool bCurrentBranch = bDiffAgainstRemoteCurrent && Branch.Equals(CurrentBranchName);
+		for (const FString& NewerFileName : ChangedRelativeFiles)
+		{
+			const FString& NewerFilePath = FPaths::ConvertRelativePathToFull(InRepositoryRoot, NewerFileName);
+
+			// Don't care about mergeable files (.collection, .ini, .uproject, etc)
+			if (!IsFileLFSLockable(NewerFileName))
+			{
+				// Check if there's newer binaries pending on this branch
+				if (bCurrentBranch && (NewerFilePath == AbsoluteChecksumFilePath || NewerFilePath.StartsWith(AbsoluteBinariesDirPath, ESearchCase::IgnoreCase) ||
+					NewerFilePath.StartsWith(AbsolutePluginsDirPath, ESearchCase::IgnoreCase)))
+				{
+					Provider.bPendingRestart = true;
+				}
+				continue;
+			}
+
+			if (bCurrentBranch || !NewerFiles.Contains(NewerFilePath))
+			{
+				NewerFiles.Add(NewerFilePath, Branch);
+			}
+		}
+	};
+
+	// Ask the service, it answers from server side mirrors instead of one git diff per branch here. Directories (wholesale
+	// refreshes) ask for the whole tree. Any failure takes the local path below.
+	bool bAnsweredByBranchStateCache = false;
+	{
+		TMap<FString, TArray<FString>> ChangedFilesByBranch;
+		if (GitBranchStateCacheClient::TryGetChangedFilesByBranch(InPathToGitBinary, InRepositoryRoot, Files, BranchesToDiff.Array(),
+																  bDiffAgainstRemoteCurrent ? CurrentBranchName : FString(), ChangedFilesByBranch))
+		{
+			for (const TPair<FString, TArray<FString>>& BranchFiles : ChangedFilesByBranch)
+			{
+				ApplyChangedFiles(BranchFiles.Key, BranchFiles.Value);
+			}
+			bAnsweredByBranchStateCache = true;
+		}
+	}
+	// [END DIVERGENCE]
+
 	TArray<FString> ParametersLog{TEXT("--pretty="), TEXT("--name-only"), TEXT(""), TEXT("--")};
 	for (auto& Branch : BranchesToDiff)
 	{
@@ -1443,24 +1594,18 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 	ParametersLog.Add(TEXT("--"));
 
 	bool bResultLog = false;
+	// [DIVERGENCE] No local log or diff when GitBranchStateCache already answered
+	// {
+	if (!bAnsweredByBranchStateCache)
 	{
+	// [END DIVERGENCE]
 		TRACE_CPUPROFILER_EVENT_SCOPE_TEXT("GitSourceControlUtils::CheckRemote Log %s");
 		bResultLog = RunCommand(TEXT("log"), InPathToGitBinary, InRepositoryRoot, ParametersLog, Files, LogResults, ErrorMessages);
-	}	
+	}
 
 	for (auto& Branch : BranchesToDiff)
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*FString::Printf(TEXT("GitSourceControlUtils::CheckRemote %s"), *Branch));
-
-		bool bCurrentBranch;
-		if (bDiffAgainstRemoteCurrent && Branch.Equals(CurrentBranchName))
-		{
-			bCurrentBranch = true;
-		}
-		else
-		{
-			bCurrentBranch = false;
-		}
 
 		if (bResultLog)
 		{
@@ -1488,27 +1633,9 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 				Intersection = LogResults;
 			}
 
-			for (const FString& NewerFileName : Intersection)
-			{
-				const FString& NewerFilePath = FPaths::ConvertRelativePathToFull(InRepositoryRoot, NewerFileName);
-
-				// Don't care about mergeable files (.collection, .ini, .uproject, etc)
-				if (!IsFileLFSLockable(NewerFileName))
-				{
-					// Check if there's newer binaries pending on this branch
-					if (bCurrentBranch && (NewerFilePath == AbsoluteChecksumFilePath || NewerFilePath.StartsWith(AbsoluteBinariesDirPath, ESearchCase::IgnoreCase) ||
-						NewerFilePath.StartsWith(AbsolutePluginsDirPath, ESearchCase::IgnoreCase)))
-					{
-						Provider.bPendingRestart = true;
-					}
-					continue;
-				}
-
-				if (bCurrentBranch || !NewerFiles.Contains(NewerFilePath))
-				{
-					NewerFiles.Add(NewerFilePath, Branch);
-				}
-			}
+			// [DIVERGENCE] The per file filtering moved into ApplyChangedFiles above
+			ApplyChangedFiles(Branch, Intersection);
+			// [END DIVERGENCE]
 		}
 		DiffResults.Reset();
 		Intersection.Reset();
@@ -1706,7 +1833,7 @@ bool UpdateChangelistStateByCommand()
 	return true;
 }
 #endif
-	
+
 // Run a batch of Git "status" command to update status of given files and/or directories.
 bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const bool InUsingLfsLocking, const TArray<FString>& InFiles,
 					 TArray<FString>& OutErrorMessages, TMap<FString, FGitSourceControlState>& OutStates)
@@ -1749,7 +1876,15 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
 	}
 
 #if ENGINE_MAJOR_VERSION == 5
-	UpdateChangelistStateByCommand();
+	// [DIVERGENCE] Rebuilding the changelists scans all of Content/, which is too slow to do for every single file update.
+	// Changelists are disabled in this fork (TECH-296), and directory (full) refreshes still rebuild them.
+	// UpdateChangelistStateByCommand();
+	if (ContainsDirectory(RepoFiles))
+	{
+		FGitScopedLogTimer ChangelistTimer(TEXT("UpdateChangelistStateByCommand"));
+		UpdateChangelistStateByCommand();
+	}
+	// [END DIVERGENCE]
 #endif
 
 	// If the only files being touched are ones which we have checked out already, don't bother updating the remote status, we don't care, because the status can't have changed underneath us
@@ -2241,6 +2376,18 @@ bool UpdateCachedStates(const TMap<const FString, FGitState>& InResults)
 			State->State.LockState = NewState.LockState;
 			State->State.LockUser = NewState.LockUser;
 		}
+		// [DIVERGENCE] git-lfs's hooks only know locks taken through git lfs lock, so after a sync they can make a file
+		// locked through GitLfsCache's locks/batch read only again. Our lock means it is ours to edit. Checked on the cached
+		// state, since a status update without lock information leaves the lock it already knows in place.
+		if (State->State.LockState == ELockState::Locked)
+		{
+			IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+			if (PlatformFile.IsReadOnly(*State->GetFilename()))
+			{
+				PlatformFile.SetReadOnly(*State->GetFilename(), false);
+			}
+		}
+		// [END DIVERGENCE]
 		if (NewState.RemoteState != ERemoteState::Unset)
 		{
 			State->State.RemoteState = NewState.RemoteState;

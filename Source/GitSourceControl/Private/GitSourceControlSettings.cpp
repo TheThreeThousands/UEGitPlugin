@@ -66,6 +66,14 @@ bool FGitSourceControlSettings::SetLfsUserName(const FString& InString)
 	return bChanged;
 }
 
+// [DIVERGENCE]
+FString FGitSourceControlSettings::GetBranchStateCacheUrlOverride() const
+{
+	FScopeLock ScopeLock(&CriticalSection);
+	return BranchStateCacheUrlOverride;
+}
+// [END DIVERGENCE]
+
 // This is called at startup nearly before anything else in our module: BinaryPath will then be used by the provider
 void FGitSourceControlSettings::LoadSettings()
 {
@@ -74,6 +82,9 @@ void FGitSourceControlSettings::LoadSettings()
 	GConfig->GetString(*GitSettingsConstants::SettingsSection, TEXT("BinaryPath"), BinaryPath, IniFile);
 	GConfig->GetBool(*GitSettingsConstants::SettingsSection, TEXT("UsingGitLfsLocking"), bUsingGitLfsLocking, IniFile);
 	GConfig->GetString(*GitSettingsConstants::SettingsSection, TEXT("LfsUserName"), LfsUserName, IniFile);
+	// [DIVERGENCE]
+	GConfig->GetString(*GitSettingsConstants::SettingsSection, TEXT("BranchStateCacheUrlOverride"), BranchStateCacheUrlOverride, IniFile);
+	// [END DIVERGENCE]
 }
 
 void FGitSourceControlSettings::SaveSettings() const
@@ -83,5 +94,11 @@ void FGitSourceControlSettings::SaveSettings() const
 	GConfig->SetString(*GitSettingsConstants::SettingsSection, TEXT("BinaryPath"), *BinaryPath, IniFile);
 	GConfig->SetBool(*GitSettingsConstants::SettingsSection, TEXT("UsingGitLfsLocking"), bUsingGitLfsLocking, IniFile);
 	GConfig->SetString(*GitSettingsConstants::SettingsSection, TEXT("LfsUserName"), *LfsUserName, IniFile);
+	// [DIVERGENCE]
+	if (!BranchStateCacheUrlOverride.IsEmpty())
+	{
+		GConfig->SetString(*GitSettingsConstants::SettingsSection, TEXT("BranchStateCacheUrlOverride"), *BranchStateCacheUrlOverride, IniFile);
+	}
+	// [END DIVERGENCE]
 	GConfig->Flush(false, IniFile);
 }

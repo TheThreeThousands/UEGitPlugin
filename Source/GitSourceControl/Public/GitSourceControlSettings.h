@@ -29,6 +29,11 @@ public:
 	/** Set the username used by the Git LFS 2 File Locks server */
 	bool SetLfsUserName(const FString& InString);
 
+	// [DIVERGENCE]
+	/** Per user GitBranchStateCache URL for testing, overrides the project's [GitSourceControl] BranchStateCacheUrl when set */
+	FString GetBranchStateCacheUrlOverride() const;
+	// [END DIVERGENCE]
+
 	/** Load settings from ini file */
 	void LoadSettings();
 
@@ -47,4 +52,9 @@ private:
 
 	/** Username used by the Git LFS 2 File Locks server */
 	FString LfsUserName;
+
+	// [DIVERGENCE]
+	/** Per user GitBranchStateCache URL override, for testing only */
+	FString BranchStateCacheUrlOverride;
+	// [END DIVERGENCE]
 };

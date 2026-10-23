@@ -23,6 +23,10 @@ public class GitSourceControl : ModuleRules
 				"SourceControlWindows",
 				"Projects",
 				"Engine",
+				// [DIVERGENCE] GitBranchStateCache client
+				"HTTP",
+				"Json",
+				// [END DIVERGENCE]
 			}
 		);
 
